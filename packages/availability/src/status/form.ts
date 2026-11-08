@@ -83,28 +83,51 @@ export type ReadResult =
   | { ok: false; errors: Record<string, string> };
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const EMOJI = /^:[a-z0-9_+'-]+:$/;
+const MAX_TEXT = 100;
 
 function isStatusType(v: string): v is StatusType {
   return (STATUS_TYPES as readonly string[]).includes(v);
 }
 
-export function readStatusSubmission(view: SubmittedView): ReadResult {
+/** True for a real calendar date in YYYY-MM-DD form (2026-02-30 is not one). */
+function isRealDate(d: string): boolean {
+  if (!DATE.test(d)) return false;
+  const [y, m, day] = d.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, day)).toISOString().slice(0, 10) === d;
+}
+
+/**
+ * Reads the submitted form. `today` is the person's local date: statuses must start today until
+ * scheduling arrives (Plan 3), and the last day may not already be over.
+ */
+export function readStatusSubmission(view: SubmittedView, opts: { today: string }): ReadResult {
   const node = (block: string): ValueNode | undefined => view.state.values[block]?.[block];
   const type = node(FIELD.type)?.selected_option?.value ?? "";
   const from = node(FIELD.from)?.selected_date ?? "";
   const to = node(FIELD.to)?.selected_date ?? "";
+  const rawText = (node(FIELD.text)?.value ?? "").trim();
+  const rawEmoji = (node(FIELD.emoji)?.value ?? "").trim();
 
   const errors: Record<string, string> = {};
   if (!isStatusType(type)) errors[FIELD.type] = "Pick what's happening";
   if (!DATE.test(from)) errors[FIELD.from] = "Pick a start date";
+  else if (!isRealDate(from)) errors[FIELD.from] = "That date doesn't exist.";
+  else if (from > opts.today)
+    errors[FIELD.from] = "Scheduling arrives in a later version — for now, the first day is today.";
   if (!DATE.test(to)) errors[FIELD.to] = "Pick an end date";
+  else if (!isRealDate(to)) errors[FIELD.to] = "That date doesn't exist.";
+  else if (to < opts.today) errors[FIELD.to] = "The last day has already passed.";
   else if (DATE.test(from) && to < from)
     errors[FIELD.to] = "The last day can't be before the first";
+  if (rawText.length > MAX_TEXT) errors[FIELD.text] = "Keep the status text under 100 characters.";
+  if (rawEmoji && !EMOJI.test(rawEmoji))
+    errors[FIELD.emoji] = "Write the emoji the way Slack does, like :palm_tree:.";
   if (!isStatusType(type) || Object.keys(errors).length > 0) return { ok: false, errors };
 
   const defaults = STATUS_DEFAULTS[type];
-  const text = (node(FIELD.text)?.value ?? "").trim() || defaults.text;
-  const emoji = (node(FIELD.emoji)?.value ?? "").trim() || defaults.emoji;
+  const text = rawText || defaults.text;
+  const emoji = rawEmoji || defaults.emoji;
   let meta: ModalMeta = { responseUrl: "" };
   try {
     meta = {

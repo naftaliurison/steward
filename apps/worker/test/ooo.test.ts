@@ -130,10 +130,23 @@ describe("/ooo", () => {
     });
     expect(await res.json()).toEqual({
       response_action: "errors",
-      errors: { to: "The last day can't be before the first" },
+      errors: { to: "The last day has already passed." },
     });
     expect(deps.deferred).toHaveLength(0);
     expect(deps.slack.responses).toHaveLength(0);
+  });
+
+  it("refuses a first day in the future with a plain field error, before saving anything", async () => {
+    await seedWorkspace(deps);
+    const res = await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-13", to: "2026-11-14" })),
+    });
+    expect(await res.json()).toEqual({
+      response_action: "errors",
+      errors: { from: "Scheduling arrives in a later version — for now, the first day is today." },
+    });
+    expect(deps.deferred).toHaveLength(0);
+    expect(deps.slack.statuses.size).toBe(0);
   });
 
   it("refuses Undo after five minutes with a plain message", async () => {

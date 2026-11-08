@@ -97,17 +97,24 @@ export function slackRoutes(deps: Deps) {
     if (payload.type === "view_submission") {
       const { view } = payload as ViewSubmissionPayload;
       if (view.callback_id !== STATUS_MODAL_CALLBACK) return c.text("");
-      const read = readStatusSubmission(view);
+      // "Today" is the person's, not UTC's, so the person is resolved before validation. The user token is not.
+      const person = await personForSlackUser(
+        deps,
+        workspace,
+        payload.user.id,
+        payload.user.username ?? payload.user.name ?? payload.user.id,
+      );
+      const read = readStatusSubmission(view, { today: todayIn(person.tz, deps.now()) });
       if (!read.ok) return c.json({ response_action: "errors", errors: read.errors });
       const responseUrl = read.meta.responseUrl;
       deps.defer(
         (async () => {
           let saved: Awaited<ReturnType<typeof saveStatus>>;
-          let person: Awaited<ReturnType<typeof personAndToken>>["person"];
           try {
-            const pt = await personAndToken();
-            person = pt.person;
-            saved = await saveStatus(availability, person, read.input, pt.userToken);
+            const userToken = person.userTokenSealed
+              ? await open(deps.tokenKey, person.userTokenSealed)
+              : null;
+            saved = await saveStatus(availability, person, read.input, userToken);
           } catch (err) {
             await tellUser(
               responseUrl,
