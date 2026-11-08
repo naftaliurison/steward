@@ -97,7 +97,7 @@ A pnpm monorepo in TypeScript:
 
 ### 5.2 Runtime
 
-Cloudflare Workers (no cold starts, free cron triggers), D1 as the database through Drizzle ORM, a Workers-compatible Slack library in HTTP mode (`slack-cloudflare-workers`), Google APIs over plain `fetch`, the Anthropic SDK over `fetch`. One deploy from GitHub Actions on `main`.
+Cloudflare Workers (no cold starts, free cron triggers), D1 as the database through Drizzle ORM, Google APIs over plain `fetch`, the Anthropic SDK over `fetch`. The Slack layer is written in-house rather than taken from a library: request-signature verification, three HTTP routes, and the Web API over `fetch` behind one `SlackClient` interface — about 150 lines — so that the fake client the demo and the tests use is a drop-in twin of the real one (decided 2026-11-08 while planning). One deploy from GitHub Actions on `main`.
 
 ### 5.3 Connectors
 
