@@ -1,5 +1,6 @@
 import { schema } from "@steward/core";
 import { and, eq, isNotNull, lt } from "drizzle-orm";
+import { cleanupDemoSessions } from "./demo/session";
 import type { Deps } from "./deps";
 
 /** Undo windows that have passed are closed so the card stops offering Undo. */
@@ -21,6 +22,9 @@ export async function expireUndoWindows(deps: Pick<Deps, "db" | "now">): Promise
 /** Runs once a minute from the cron trigger. Plan 3 adds scheduled fires, asks and retries here. */
 export async function runTick(
   deps: Pick<Deps, "db" | "now">,
-): Promise<{ undoWindowsExpired: number }> {
-  return { undoWindowsExpired: await expireUndoWindows(deps) };
+): Promise<{ undoWindowsExpired: number; demoSessionsRemoved: number }> {
+  return {
+    undoWindowsExpired: await expireUndoWindows(deps),
+    demoSessionsRemoved: await cleanupDemoSessions(deps),
+  };
 }
