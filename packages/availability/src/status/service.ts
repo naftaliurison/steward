@@ -26,8 +26,15 @@ function ctxFor(person: PersonRow, userToken: string | null): ActorCtx {
   return { workspaceId: person.workspaceId, personId: person.id, userToken };
 }
 
-export async function getStatus(db: Db, id: string): Promise<StatusRow | null> {
-  const rows = await db.select().from(schema.statuses).where(eq(schema.statuses.id, id));
+export async function getStatus(
+  db: Db,
+  id: string,
+  workspaceId: string,
+): Promise<StatusRow | null> {
+  const rows = await db
+    .select()
+    .from(schema.statuses)
+    .where(and(eq(schema.statuses.id, id), eq(schema.statuses.workspaceId, workspaceId)));
   return rows[0] ?? null;
 }
 
@@ -96,7 +103,7 @@ export async function undoStatus(
   person: PersonRow,
   userToken: string | null,
 ): Promise<SaveResult | { error: string }> {
-  const status = await getStatus(deps.db, statusId);
+  const status = await getStatus(deps.db, statusId, person.workspaceId);
   if (!status || status.personId !== person.id)
     return { error: "That status isn't yours or no longer exists." };
   if (status.state === "cancelled")

@@ -1,11 +1,12 @@
 import { STATUS_MODAL_CALLBACK, UNDO_ACTION, zonedTimeToEpochMs } from "@steward/availability";
 import { type Block, schema } from "@steward/core";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
+import { LOOKUP_FAILED, SAVE_FAILED, UNDO_FAILED } from "../src/routes/slack";
 import { flush, NOW, seedWorkspace, slackPost, type TestDeps, TZ, testDeps } from "./helpers";
 
-const RESPONSE_URL = "https://hooks.slack.test/r1";
+const RESPONSE_URL = "https://hooks.slack.com/commands/T1/1/r1";
 
 function submission(v: { type: string; from: string; to: string; text?: string; emoji?: string }) {
   return {
@@ -130,10 +131,23 @@ describe("/ooo", () => {
     });
     expect(await res.json()).toEqual({
       response_action: "errors",
-      errors: { to: "The last day can't be before the first" },
+      errors: { to: "The last day has already passed." },
     });
     expect(deps.deferred).toHaveLength(0);
     expect(deps.slack.responses).toHaveLength(0);
+  });
+
+  it("refuses a first day in the future with a plain field error, before saving anything", async () => {
+    await seedWorkspace(deps);
+    const res = await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-13", to: "2026-11-14" })),
+    });
+    expect(await res.json()).toEqual({
+      response_action: "errors",
+      errors: { from: "Scheduling arrives in a later version — for now, the first day is today." },
+    });
+    expect(deps.deferred).toHaveLength(0);
+    expect(deps.slack.statuses.size).toBe(0);
   });
 
   it("refuses Undo after five minutes with a plain message", async () => {
@@ -190,7 +204,7 @@ describe("/ooo", () => {
     });
     await flush(deps);
     expect(deps.slack.responses).toHaveLength(1);
-    expect(deps.slack.responses[0]?.text).toMatch(/^Your status didn't save — /);
+    expect(deps.slack.responses[0]?.text).toBe(SAVE_FAILED);
     expect(deps.slack.statuses.size).toBe(0);
   });
 
@@ -225,7 +239,108 @@ describe("/ooo", () => {
       }),
     });
     await flush(deps);
-    expect(deps.slack.responses.at(-1)?.text).toMatch(/^Undo didn't go through — /);
+    expect(deps.slack.responses.at(-1)?.text).toBe(UNDO_FAILED);
     expect(deps.slack.statuses.get("xoxp-dana")).toEqual(saved);
+  });
+
+  it("ignores a malformed interaction payload with a 200 and no work", async () => {
+    await seedWorkspace(deps);
+    const res = await slackPost(app, "/slack/interactions", { payload: "not json" });
+    expect(res.status).toBe(200);
+    expect(deps.deferred).toHaveLength(0);
+    for (const payload of [
+      JSON.stringify({ type: "x" }),
+      JSON.stringify({ type: "view_submission", team: { id: "T1" } }),
+      "null",
+      '"x"',
+    ]) {
+      const bad = await slackPost(app, "/slack/interactions", { payload });
+      expect(bad.status).toBe(200);
+    }
+    expect(deps.deferred).toHaveLength(0);
+    expect(deps.slack.openedViews).toHaveLength(0);
+    expect(deps.slack.responses).toHaveLength(0);
+  });
+
+  it("answers /ooo plainly when the form can't be opened", async () => {
+    await seedWorkspace(deps);
+    deps.slack.failNext.openView = "expired_trigger_id";
+    const res = await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      text: "",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "t",
+      response_url: RESPONSE_URL,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(
+      "Steward couldn't open the form just now. Please try /ooo again.",
+    );
+  });
+
+  it("answers /ooo plainly when the workspace's bot token can't be read", async () => {
+    await seedWorkspace(deps);
+    await deps.db
+      .update(schema.workspaces)
+      .set({ botTokenSealed: "not-a-sealed-token" })
+      .where(eq(schema.workspaces.id, "T1"));
+    const res = await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      text: "",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "t",
+      response_url: RESPONSE_URL,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("can't reach Slack for this workspace");
+    expect(deps.slack.openedViews).toHaveLength(0);
+  });
+
+  it("answers with an inline error when the person lookup fails", async () => {
+    await seedWorkspace(deps);
+    await deps.db.run(sql`DROP TABLE people`);
+    const res = await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+    });
+    expect(await res.json()).toEqual({
+      response_action: "errors",
+      errors: { type: LOOKUP_FAILED },
+    });
+    expect(deps.deferred).toHaveLength(0);
+  });
+
+  it("validates the dates against the person's today, not UTC's", async () => {
+    const LATE = Date.UTC(2026, 10, 12, 22, 30);
+    const lateDeps = testDeps({ now: () => LATE });
+    const lateApp = createApp(lateDeps);
+    await seedWorkspace(lateDeps);
+
+    const today = await slackPost(
+      lateApp,
+      "/slack/interactions",
+      {
+        payload: JSON.stringify(submission({ type: "out", from: "2026-11-13", to: "2026-11-13" })),
+      },
+      LATE,
+    );
+    expect(await today.json()).toEqual({ response_action: "clear" });
+    await flush(lateDeps);
+
+    const past = await slackPost(
+      lateApp,
+      "/slack/interactions",
+      {
+        payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+      },
+      LATE,
+    );
+    expect(await past.json()).toEqual({
+      response_action: "errors",
+      errors: { to: "The last day has already passed." },
+    });
   });
 });

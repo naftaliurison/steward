@@ -19,6 +19,8 @@ export const people = sqliteTable(
     displayName: text("display_name").notNull(),
     tz: text("tz").notNull().default("UTC"),
     userTokenSealed: text("user_token_sealed"),
+    /** When the display name and tz were last read from Slack; after a failed or empty read it is back-dated so the next attempt is an hour away (see personForSlackUser). Null until the first read. */
+    profileSyncedAt: integer("profile_synced_at"),
   },
   (t) => [index("people_workspace_idx").on(t.workspaceId)],
 );

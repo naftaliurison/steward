@@ -1,7 +1,15 @@
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createTestDb } from "../testing";
 import type { Db } from "./client";
-import { ensurePerson, getWorkspace, setPersonUserToken, upsertWorkspace } from "./repo";
+import {
+  ensurePerson,
+  getWorkspace,
+  setPersonUserToken,
+  updatePersonProfile,
+  upsertWorkspace,
+} from "./repo";
+import * as schema from "./schema";
 
 describe("repo", () => {
   let db: Db;
@@ -44,5 +52,31 @@ describe("repo", () => {
     const person = await ensurePerson(db, "T1", "U1", "Dana");
     const updated = await setPersonUserToken(db, person.id, "sealed-user");
     expect(updated.userTokenSealed).toBe("sealed-user");
+  });
+
+  it("updates a person's profile from Slack and records when", async () => {
+    const person = await ensurePerson(db, "T1", "U1", "U1");
+    expect(person.profileSyncedAt).toBeNull();
+    const updated = await updatePersonProfile(db, person.id, {
+      displayName: "Dana",
+      tz: "Asia/Jerusalem",
+      profileSyncedAt: 5_000,
+    });
+    expect(updated).toMatchObject({
+      displayName: "Dana",
+      tz: "Asia/Jerusalem",
+      profileSyncedAt: 5_000,
+    });
+  });
+
+  it("ensurePerson tolerates two first calls at once", async () => {
+    const [a, b] = await Promise.all([
+      ensurePerson(db, "T1", "U7", "Noa"),
+      ensurePerson(db, "T1", "U7", "Noa"),
+    ]);
+    expect(a.id).toBe("T1:U7");
+    expect(b.id).toBe("T1:U7");
+    const rows = await db.select().from(schema.people).where(eq(schema.people.id, "T1:U7"));
+    expect(rows).toHaveLength(1);
   });
 });

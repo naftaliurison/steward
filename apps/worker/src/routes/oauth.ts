@@ -73,22 +73,34 @@ export function oauthRoutes(deps: Deps) {
   });
 
   r.get("/slack/callback", async (c) => {
+    const denied = c.req.query("error");
+    if (denied) {
+      return c.html(
+        `<!doctype html><title>Steward not installed</title><p>Install cancelled (${escapeHtml(denied)}). Nothing was changed.</p>`,
+      );
+    }
     const code = c.req.query("code") ?? "";
     const state = c.req.query("state") ?? "";
     if (!code || !(await verifyState(deps.signingSecret, state, Math.floor(deps.now() / 1000)))) {
       return c.text("This install link has expired. Start again from the product page.", 400);
     }
-    const res = await deps.fetchFn("https://slack.com/api/oauth.v2.access", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: deps.slackClientId,
-        client_secret: deps.slackClientSecret,
-        code,
-        redirect_uri: redirectUri,
-      }).toString(),
-    });
-    const data = (await res.json()) as AccessResponse;
+    let data: AccessResponse;
+    try {
+      const res = await deps.fetchFn("https://slack.com/api/oauth.v2.access", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: deps.slackClientId,
+          client_secret: deps.slackClientSecret,
+          code,
+          redirect_uri: redirectUri,
+        }).toString(),
+      });
+      data = (await res.json()) as AccessResponse;
+    } catch (err) {
+      console.error("oauth.v2.access failed", { err });
+      return c.text("Slack didn't answer the install request. Try again in a minute.", 502);
+    }
     if (!data.ok || !data.access_token || !data.team || !data.bot_user_id) {
       return c.text(`Slack didn't complete the install (${data.error ?? "unknown_error"}).`, 502);
     }

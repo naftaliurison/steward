@@ -11,16 +11,21 @@ import {
 } from "@steward/availability";
 import {
   ConnectorRegistry,
-  ensurePerson,
   getWorkspace,
   open,
+  type PersonRow,
   verifySlackSignature,
 } from "@steward/core";
 import { Hono } from "hono";
 import type { Deps } from "../deps";
+import { personForSlackUser } from "../people";
 import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } from "../slackTypes";
 
-const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+export const SAVE_FAILED = "Your status didn't save. Please try again in a moment.";
+export const UNDO_FAILED = "Undo didn't go through. Please try again in a moment.";
+export const LOOKUP_FAILED = "Steward couldn't reach its records. Please try again in a moment.";
+const BOT_TOKEN_UNREADABLE =
+  "Steward can't reach Slack for this workspace right now. Ask whoever installed it to reinstall Steward.";
 
 type Vars = { Variables: { rawBody: string } };
 
@@ -48,28 +53,46 @@ export function slackRoutes(deps: Deps) {
     const workspace = await getWorkspace(deps.db, form.get("team_id") ?? "");
     if (!workspace) return c.text("Steward isn't installed in this workspace yet.");
     const userId = form.get("user_id") ?? "";
-    const person = await ensurePerson(
-      deps.db,
-      workspace.id,
-      userId,
-      form.get("user_name") ?? userId,
-    );
-    const botToken = await open(deps.tokenKey, workspace.botTokenSealed);
-    await deps.slack.openView({
-      botToken,
-      triggerId: form.get("trigger_id") ?? "",
-      view: buildStatusModal({
-        today: todayIn(person.tz, deps.now()),
-        responseUrl: form.get("response_url") ?? "",
-      }),
-    });
+    let botToken: string;
+    try {
+      botToken = await open(deps.tokenKey, workspace.botTokenSealed);
+    } catch (err) {
+      console.error("bot token unreadable", { workspace: workspace.id, err });
+      return c.text(BOT_TOKEN_UNREADABLE);
+    }
+    try {
+      const person = await personForSlackUser(
+        deps,
+        workspace,
+        userId,
+        form.get("user_name") ?? userId,
+      );
+      await deps.slack.openView({
+        botToken,
+        triggerId: form.get("trigger_id") ?? "",
+        view: buildStatusModal({
+          today: todayIn(person.tz, deps.now()),
+          responseUrl: form.get("response_url") ?? "",
+        }),
+      });
+    } catch (err) {
+      console.error("could not open the status form", { workspace: workspace.id, err });
+      return c.text("Steward couldn't open the form just now. Please try /ooo again.");
+    }
     return c.text("");
   });
 
   r.post("/interactions", async (c) => {
-    const payload = JSON.parse(
-      new URLSearchParams(c.get("rawBody")).get("payload") ?? "{}",
-    ) as InteractionPayload;
+    let payload: InteractionPayload;
+    try {
+      payload = JSON.parse(
+        new URLSearchParams(c.get("rawBody")).get("payload") ?? "",
+      ) as InteractionPayload;
+    } catch {
+      return c.text(""); // not a Slack payload; nothing to act on
+    }
+    if (!payload || typeof payload !== "object" || !payload.team?.id || !payload.user?.id)
+      return c.text("");
     const workspace = await getWorkspace(deps.db, payload.team?.id ?? "");
     if (!workspace) return c.text("");
     const availability = {
@@ -77,47 +100,49 @@ export function slackRoutes(deps: Deps) {
       registry: new ConnectorRegistry().register(new SlackStatusConnector(deps.slack)),
       now: deps.now,
     };
-    const personAndToken = async () => {
-      const person = await ensurePerson(
-        deps.db,
-        workspace.id,
-        payload.user.id,
-        payload.user.username ?? payload.user.name ?? payload.user.id,
-      );
-      const userToken = person.userTokenSealed
-        ? await open(deps.tokenKey, person.userTokenSealed)
-        : null;
-      return { person, userToken };
-    };
     // Slack wants view_submission and block_actions answered within 3 seconds, so the work runs after the answer.
     const tellUser = async (responseUrl: string | undefined, text: string) => {
       if (!responseUrl) return;
       try {
         await deps.slack.respond({ responseUrl, text });
-      } catch {
-        // Nothing left to tell the user through.
+      } catch (err) {
+        console.error("could not tell the user", { err });
       }
     };
 
     if (payload.type === "view_submission") {
       const { view } = payload as ViewSubmissionPayload;
       if (view.callback_id !== STATUS_MODAL_CALLBACK) return c.text("");
-      const read = readStatusSubmission(view);
+      // "Today" is the person's, not UTC's, so the person is resolved before validation. The user token is not.
+      let person: PersonRow;
+      try {
+        person = await personForSlackUser(
+          deps,
+          workspace,
+          payload.user.id,
+          payload.user.username ?? payload.user.name ?? payload.user.id,
+        );
+      } catch (err) {
+        console.error("person lookup failed", { user: payload.user.id, err });
+        return c.json({
+          response_action: "errors",
+          errors: { type: LOOKUP_FAILED },
+        });
+      }
+      const read = readStatusSubmission(view, { today: todayIn(person.tz, deps.now()) });
       if (!read.ok) return c.json({ response_action: "errors", errors: read.errors });
       const responseUrl = read.meta.responseUrl;
       deps.defer(
         (async () => {
           let saved: Awaited<ReturnType<typeof saveStatus>>;
-          let person: Awaited<ReturnType<typeof personAndToken>>["person"];
           try {
-            const pt = await personAndToken();
-            person = pt.person;
-            saved = await saveStatus(availability, person, read.input, pt.userToken);
+            const userToken = person.userTokenSealed
+              ? await open(deps.tokenKey, person.userTokenSealed)
+              : null;
+            saved = await saveStatus(availability, person, read.input, userToken);
           } catch (err) {
-            await tellUser(
-              responseUrl,
-              `Your status didn't save — ${errorMessage(err)}. Please try again.`,
-            );
+            console.error("save failed", { person: person.id, err });
+            await tellUser(responseUrl, SAVE_FAILED);
             return;
           }
           try {
@@ -125,8 +150,8 @@ export function slackRoutes(deps: Deps) {
               const card = resultCard({ ...saved, tz: person.tz, now: deps.now() });
               await deps.slack.respond({ responseUrl, ...card });
             }
-          } catch {
-            // The status is saved; a lost receipt is not worth a misleading message.
+          } catch (err) {
+            console.error("receipt not delivered", { person: person.id, err });
           }
         })(),
       );
@@ -140,14 +165,22 @@ export function slackRoutes(deps: Deps) {
         const statusId = action.value;
         deps.defer(
           (async () => {
-            let person: Awaited<ReturnType<typeof personAndToken>>["person"];
+            let person: PersonRow;
             let result: Awaited<ReturnType<typeof undoStatus>>;
             try {
-              const pt = await personAndToken();
-              person = pt.person;
-              result = await undoStatus(availability, statusId, person, pt.userToken);
+              person = await personForSlackUser(
+                deps,
+                workspace,
+                payload.user.id,
+                payload.user.username ?? payload.user.name ?? payload.user.id,
+              );
+              const userToken = person.userTokenSealed
+                ? await open(deps.tokenKey, person.userTokenSealed)
+                : null;
+              result = await undoStatus(availability, statusId, person, userToken);
             } catch (err) {
-              await tellUser(response_url, `Undo didn't go through — ${errorMessage(err)}.`);
+              console.error("undo failed", { status: statusId, err });
+              await tellUser(response_url, UNDO_FAILED);
               return;
             }
             try {
@@ -161,8 +194,8 @@ export function slackRoutes(deps: Deps) {
                   replaceOriginal: true,
                 });
               }
-            } catch {
-              // The undo went through; a lost receipt is not worth a misleading message.
+            } catch (err) {
+              console.error("receipt not delivered", { status: statusId, err });
             }
           })(),
         );

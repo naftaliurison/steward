@@ -23,6 +23,16 @@
 
 ---
 
+## Deviations recorded during execution (2026-11-08)
+
+The code is the source of truth where it differs from the task text below; each change was reviewed.
+
+- **`.gitattributes` landed first** (`* text=auto eol=lf`): the post-merge checkout had gone CRLF under this machine's `autocrlf=true` and lint was red on untouched files; Task 5's step for it became a no-op.
+- **Profile sync (Task 1, after review):** `users.info` has a 1.5 s timeout; a failed or empty read writes a one-hour retry marker (`profileSyncedAt = now − 24 h + 1 h`) instead of retrying on every request; `UserProfile.tz` is `string | null`, an absent or unknown zone keeps the stored one (validated with `Intl.DateTimeFormat`) — the plan's `"UTC"` fallback would have overwritten a known zone with a guess.
+- **Reader (Task 2):** with the plan's check order, a last day before today reads "The last day has already passed." before "can't be before the first" can be reached; two test expectations were updated.
+- **Hardening (Task 3, after review):** `/commands` wraps the person lookup and `views.open` in a try/catch with a plain sentence; `assertTrustedResponseUrl` also refuses a non-default port and embedded credentials; the inline lookup error is the exported `LOOKUP_FAILED`; the `view_submission` person lookup before validation is wrapped and answers an inline field error.
+- **Deploy (Task 5, after review):** the worker's script is `release`, because pnpm's built-in `deploy` command shadows a script of that name; the runbook deploys first (the Slack manifest needs the Worker's host), uses `pnpm exec wrangler secret put`, and the CI deploy job has `concurrency: deploy-main`.
+
 ## File structure
 
 ```
@@ -1125,7 +1135,7 @@ Everything below is done once by the account owner; CI deploys on every later pu
 2. **Database.** `pnpm --filter @steward/worker exec wrangler d1 create steward` → paste the printed `database_id` into `apps/worker/wrangler.toml`, commit. Then `pnpm --filter @steward/worker db:migrate:remote`.
 3. **Slack app.** At api.slack.com/apps choose *Create New App → From an app manifest*, paste `apps/worker/slack-manifest.json` with `APP_HOST` replaced by the Worker's host (shown by `wrangler deploy`, e.g. `steward.<account>.workers.dev`). Under *Basic Information* copy the signing secret, client id and client secret. Under *Manage Distribution* enable public distribution.
 4. **Secrets.** From `apps/worker`: `wrangler secret put SLACK_SIGNING_SECRET`, `wrangler secret put SLACK_CLIENT_ID`, `wrangler secret put SLACK_CLIENT_SECRET`, `wrangler secret put TOKEN_KEY` (32 random bytes, base64: `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`), `wrangler secret put APP_URL` (`https://<host>`, no trailing slash).
-5. **Deploy.** `pnpm --filter @steward/worker deploy`. Open `https://<host>/health` → `{"ok":true}`.
+5. **Deploy.** `pnpm --filter @steward/worker release`. Open `https://<host>/health` → `{"ok":true}`.
 6. **Install.** Visit `https://<host>/oauth/slack/install`, approve, then type `/ooo` in Slack.
 7. **CI.** Add repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; from then on every push to `main` applies migrations and deploys after the checks pass.
 
@@ -1154,7 +1164,7 @@ Append to `.github/workflows/ci.yml` (under `jobs:`, after `check`):
         run: echo "No CLOUDFLARE_API_TOKEN secret; deploy skipped."
       - name: Apply migrations and deploy
         if: env.CLOUDFLARE_API_TOKEN != ''
-        run: pnpm --filter @steward/worker db:migrate:remote && pnpm --filter @steward/worker deploy
+        run: pnpm --filter @steward/worker db:migrate:remote && pnpm --filter @steward/worker release
 ```
 
 - [ ] **Step 4: Verify and commit**

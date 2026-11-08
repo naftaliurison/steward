@@ -16,6 +16,19 @@ export type SetStatusArgs = {
   expiration: number;
 };
 
+/** `tz` is null when the Slack user has none set. */
+export type UserProfile = { displayName: string; tz: string | null };
+
+/** Slack's answer must fit inside the 3-second trigger_id window with room to open the modal. */
+export const USERS_INFO_TIMEOUT_MS = 1500;
+
+type SlackUser = {
+  name?: string;
+  real_name?: string;
+  tz?: string;
+  profile?: { display_name?: string; real_name?: string };
+};
+
 export interface SlackClient {
   openView(args: {
     botToken: string;
@@ -25,6 +38,8 @@ export interface SlackClient {
   respond(args: RespondArgs): Promise<void>;
   setUserStatus(args: SetStatusArgs): Promise<void>;
   clearUserStatus(args: { userToken: string }): Promise<void>;
+  /** The person's display name and IANA time zone, or null when Slack doesn't know the user. */
+  getUserInfo(args: { botToken: string; userId: string }): Promise<UserProfile | null>;
 }
 
 export class SlackApiError extends Error {
@@ -37,7 +52,35 @@ export class SlackApiError extends Error {
   }
 }
 
+/** Slack's response_url values live on hooks.slack.com; anything else is not Slack and gets nothing. */
+export function assertTrustedResponseUrl(responseUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(responseUrl);
+  } catch {
+    throw new SlackApiError("response_url", "untrusted_url");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "hooks.slack.com" ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== ""
+  ) {
+    throw new SlackApiError("response_url", "untrusted_url");
+  }
+}
+
 type ApiResponse = { ok: boolean; error?: string } & Record<string, unknown>;
+
+/** Slack answers JSON; an edge or outage page is not Slack and becomes a typed error. */
+async function parseJson(res: Response, method: string): Promise<ApiResponse> {
+  try {
+    return (await res.json()) as ApiResponse;
+  } catch {
+    throw new SlackApiError(method, `http_${res.status}`);
+  }
+}
 
 export class RealSlackClient implements SlackClient {
   constructor(private readonly fetchFn: typeof fetch = fetch) {}
@@ -55,7 +98,7 @@ export class RealSlackClient implements SlackClient {
       },
       body: JSON.stringify(body),
     });
-    const data = (await res.json()) as ApiResponse;
+    const data = await parseJson(res, method);
     if (!data.ok) throw new SlackApiError(method, data.error ?? "unknown_error");
     return data;
   }
@@ -73,6 +116,7 @@ export class RealSlackClient implements SlackClient {
   }
 
   async respond(args: RespondArgs): Promise<void> {
+    assertTrustedResponseUrl(args.responseUrl);
     const res = await this.fetchFn(args.responseUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -100,5 +144,28 @@ export class RealSlackClient implements SlackClient {
     await this.call("users.profile.set", args.userToken, {
       profile: { status_text: "", status_emoji: "", status_expiration: 0 },
     });
+  }
+
+  async getUserInfo(args: { botToken: string; userId: string }): Promise<UserProfile | null> {
+    const url = new URL("https://slack.com/api/users.info");
+    url.searchParams.set("user", args.userId);
+    const res = await this.fetchFn(url.toString(), {
+      method: "GET",
+      headers: { authorization: `Bearer ${args.botToken}` },
+      signal: AbortSignal.timeout(USERS_INFO_TIMEOUT_MS),
+    });
+    const data = await parseJson(res, "users.info");
+    if (!data.ok) {
+      if (data.error === "user_not_found") return null;
+      throw new SlackApiError("users.info", data.error ?? "unknown_error");
+    }
+    const user = (data.user ?? {}) as SlackUser;
+    const displayName =
+      user.profile?.display_name ||
+      user.profile?.real_name ||
+      user.real_name ||
+      user.name ||
+      args.userId;
+    return { displayName, tz: user.tz || null };
   }
 }

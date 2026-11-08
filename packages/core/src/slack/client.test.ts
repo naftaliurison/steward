@@ -66,4 +66,64 @@ describe("RealSlackClient", () => {
       bad.respond({ responseUrl: "https://hooks.slack.com/x", text: "hi" }),
     ).rejects.toEqual(new SlackApiError("response_url", "http_500"));
   });
+
+  it("reads a user's display name and time zone with the bot token", async () => {
+    const fetchFn = fetchReturning({
+      ok: true,
+      user: {
+        name: "dana",
+        real_name: "Dana Levi",
+        tz: "Asia/Jerusalem",
+        profile: { display_name: "Dana" },
+      },
+    });
+    const slack = new RealSlackClient(fetchFn);
+    expect(await slack.getUserInfo({ botToken: "xoxb-1", userId: "U1" })).toEqual({
+      displayName: "Dana",
+      tz: "Asia/Jerusalem",
+    });
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://slack.com/api/users.info?user=U1");
+    expect(init.method).toBe("GET");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer xoxb-1");
+  });
+
+  it("returns null for an unknown user and falls back to the id and a null time zone when fields are missing", async () => {
+    const unknown = new RealSlackClient(fetchReturning({ ok: false, error: "user_not_found" }));
+    expect(await unknown.getUserInfo({ botToken: "x", userId: "U9" })).toBeNull();
+    const bare = new RealSlackClient(fetchReturning({ ok: true, user: {} }));
+    expect(await bare.getUserInfo({ botToken: "x", userId: "U9" })).toEqual({
+      displayName: "U9",
+      tz: null,
+    });
+  });
+
+  it("turns a non-JSON reply into a typed error instead of a SyntaxError", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response("<html>bad gateway</html>", { status: 502 }),
+    ) as unknown as typeof fetch;
+    await expect(new RealSlackClient(fetchFn).clearUserStatus({ userToken: "t" })).rejects.toEqual(
+      new SlackApiError("users.profile.set", "http_502"),
+    );
+  });
+
+  it("refuses to post a receipt anywhere but hooks.slack.com", async () => {
+    const fetchFn = fetchReturning({}, 200);
+    const slack = new RealSlackClient(fetchFn);
+    await expect(
+      slack.respond({ responseUrl: "https://evil.example/x", text: "hi" }),
+    ).rejects.toEqual(new SlackApiError("response_url", "untrusted_url"));
+    await expect(
+      slack.respond({ responseUrl: "http://hooks.slack.com/x", text: "hi" }),
+    ).rejects.toEqual(new SlackApiError("response_url", "untrusted_url"));
+    for (const responseUrl of ["https://hooks.slack.com:8443/x", "https://u:p@hooks.slack.com/x"]) {
+      await expect(slack.respond({ responseUrl, text: "hi" })).rejects.toEqual(
+        new SlackApiError("response_url", "untrusted_url"),
+      );
+    }
+    await expect(slack.respond({ responseUrl: "not a url", text: "hi" })).rejects.toEqual(
+      new SlackApiError("response_url", "untrusted_url"),
+    );
+    expect(fetchFn.mock.calls).toHaveLength(0);
+  });
 });
