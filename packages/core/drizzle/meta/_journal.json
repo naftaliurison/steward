@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1794151342000,
+      "tag": "0000_pale_george_stacy",
+      "breakpoints": true
+    }
+  ]
+}
