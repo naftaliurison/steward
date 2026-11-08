@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "lib": ["ES2022", "DOM"],
+    "paths": {
+      "@steward/core": ["./packages/core/src/index.ts"],
+      "@steward/core/testing": ["./packages/core/src/testing.ts"],
+      "@steward/availability": ["./packages/availability/src/index.ts"]
+    }
+  }
+}

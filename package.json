@@ -1,0 +1,29 @@
+{
+  "name": "steward",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "biome check packages apps package.json tsconfig.base.json vitest.config.ts",
+    "lint:fix": "biome check --write packages apps package.json tsconfig.base.json vitest.config.ts",
+    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/availability && tsc --noEmit -p apps/worker && tsc --noEmit -p apps/worker/tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "workerd",
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

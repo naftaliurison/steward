@@ -1,0 +1,19 @@
+name = "steward"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Replace database_id after `pnpm --filter @steward/worker exec wrangler d1 create steward`
+# (needs the Cloudflare account the owner creates; any id works for `wrangler dev` locally).
+[[d1_databases]]
+binding = "DB"
+database_name = "steward"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../../packages/core/drizzle"
+
+[triggers]
+crons = ["* * * * *"]
+
+# APP_URL and SLACK_CLIENT_ID are not set here on purpose: a `[vars]` table would overwrite
+# production values on every deploy. Locally they come from .dev.vars (see .dev.vars.example);
+# in production set them once with `wrangler secret put APP_URL` and `wrangler secret put SLACK_CLIENT_ID`.

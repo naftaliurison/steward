@@ -16,9 +16,22 @@
 - Principles from the spec apply to every task: parse then review; act only on a yes; receipts and Undo (five minutes); honest states (`pending`, `done`, `failed`, `skipped`, `undone` are distinct and worded plainly); one save path.
 - Tokens are never stored in clear: AES-GCM under the `TOKEN_KEY` secret.
 - Nothing from any employer — no company names, org vocabulary or people — in code, comments, fixtures or docs. Sample names in tests are fictional (Dana, Omer, Noa).
-- Commits: conventional prefixes (`feat:`, `test:`, `chore:`, `docs:`), one commit per task, each ending with the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Commits: conventional prefixes (`feat:`, `test:`, `chore:`, `docs:`), one commit per task, each ending with a `Co-Authored-By: Claude <model> <noreply@anthropic.com>` trailer naming the Claude model that made the commit (the commit commands in this plan show the trailer's shape; substitute your own model name).
 - Licence header is not required per file; `LICENSE` (BSL 1.1) covers the repo.
 - Run everything from the repo root `C:\Users\nafta\steward` unless a step says otherwise.
+
+---
+
+## Deviations recorded during execution (2026-11-08)
+
+The code is the source of truth where it differs from the task text below; each change was reviewed.
+
+- **Tooling (Task 1).** `packageManager` is the installed `pnpm@10.34.5`. The `lint`/`lint:fix` scripts run Biome on `packages apps package.json tsconfig.base.json vitest.config.ts` rather than `.`, because Biome 2.6.6 formats Markdown and `biome.json` is hook-protected in the owner's environment (its `$schema` still says 2.2.0 — the owner's edit). `pnpm.onlyBuiltDependencies` lists `better-sqlite3`, `esbuild`, `workerd`. The `typecheck` script grew one project at a time (core → availability → worker). `.superpowers/` is git-ignored.
+- **Types under TypeScript 5.9 (Tasks 3, 8, 10).** `b64decode` returns `Uint8Array<ArrayBuffer>`; `importKey`'s `usage` is `"encrypt" | "decrypt"` (the Worker compiles core without the DOM lib); `scheduled` takes a `ScheduledController`.
+- **Engine (Task 6, after review).** `ConnectorCtx` requires `idempotencyKey`; callers pass `ActorCtx = Omit<ConnectorCtx, "idempotencyKey">` and the engine spreads each target's key into `perform`/`undo`. The audit `result` of an undo that throws or has no connector is `undo_failed` (the target stays `done` with the reason). The two-statement `record` (update + audit insert) is not atomic — to be made a `db.batch` with the first real connector in Plan 3.
+- **Availability (Task 7, after review).** `undoStatus` refuses unless the status is `active` or `scheduled` (undoing a replaced status would clear the newer one from Slack); `SlackStatusConnector.undo` throws when there is no user token instead of reporting "cleared"; a status is marked `cancelled` only when no target is still `done`; `replacedStatusId` is set only when the new status is active; the window check is `undoUntilMs <= now`.
+- **Worker (Tasks 8–10, after review).** Slack is acknowledged within its 3-second window: `Deps.defer` (`ctx.waitUntil` in production, collected and `flush`ed in tests) runs save/undo and the receipt after the response; validation errors stay synchronous; failures inside the deferred work are posted to the response_url in plain words. `ensurePerson` and the user-token `open` happen only in the branches that need them.
+- **Demo session and emulator** are Plan 2, not this plan.
 
 ---
 

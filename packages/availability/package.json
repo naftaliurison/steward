@@ -1,0 +1,13 @@
+{
+  "name": "@steward/availability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@steward/core": "workspace:*",
+    "drizzle-orm": "^0.44.0"
+  }
+}

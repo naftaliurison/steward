@@ -6,7 +6,17 @@ Steward is one core — the Slack surface, connections to other tools, an act-wi
 
 **Steward Availability** is the first: say once, in plain words, that you're out, travelling or working remotely, and it sets your Slack status, your Google calendars and your Gmail auto-reply — reviewable before it saves, reversible for five minutes after. It also finds a time for a group and books it with an agenda.
 
-Status: design complete, build in progress. The design is in [`docs/superpowers/specs/2026-11-08-steward-availability-design.md`](docs/superpowers/specs/2026-11-08-steward-availability-design.md).
+Status: Plan 1 (core and the first door) built — `/ooo` form → Slack status → receipt → Undo, install flow, minute tick. The design is in [`docs/superpowers/specs/2026-11-08-steward-availability-design.md`](docs/superpowers/specs/2026-11-08-steward-availability-design.md); plans live in `docs/superpowers/plans/`.
+
+## Develop
+
+```bash
+pnpm install
+pnpm test                                   # unit + flow tests (Node, in-memory SQLite, fake Slack)
+pnpm --filter @steward/worker db:migrate:local
+cp apps/worker/.dev.vars.example apps/worker/.dev.vars   # then fill in the values
+pnpm --filter @steward/worker dev           # http://localhost:8787/health
+```
 
 ## Licence
 
