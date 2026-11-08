@@ -25,7 +25,31 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<u
   }
 }
 
-const responseUrlFor = (session: DemoSession) => `https://hooks.slack.com/demo/${session.id}`;
+const responseUrlFor = (session: Pick<DemoSession, "id">) =>
+  `https://hooks.slack.com/demo/${session.id}`;
+
+/**
+ * What the visitor's interaction becomes before it reaches the handlers.
+ * The visitor never chooses the workspace, the user, where receipts go, or the
+ * modal's private_metadata (which carries a response URL).
+ */
+export function demoInteractionPayload(
+  body: Record<string, unknown>,
+  session: Pick<DemoSession, "id" | "workspaceId">,
+  you: { slackUserId: string; displayName: string } | null | undefined,
+): Record<string, unknown> {
+  const url = responseUrlFor(session);
+  const payload: Record<string, unknown> = {
+    ...body,
+    team: { id: session.workspaceId },
+    user: { id: you?.slackUserId ?? "U_DANA", username: you?.displayName ?? "you" },
+    response_url: url,
+  };
+  if (isObject(payload.view)) {
+    payload.view = { ...payload.view, private_metadata: JSON.stringify({ responseUrl: url }) };
+  }
+  return payload;
+}
 
 async function stateOf(deps: Deps, session: DemoSession) {
   const events = await readDemoEvents(deps.db, session.id);
@@ -96,7 +120,7 @@ export function demoRoutes(deps: Deps) {
       team_id: session.workspaceId,
       user_id: you?.slackUserId ?? "U_DANA",
       user_name: you?.displayName ?? "you",
-      trigger_id: `demo-${d.now()}`,
+      trigger_id: `demo-${crypto.randomUUID()}`,
       response_url: responseUrlFor(session),
     });
     const answer = await handleSlashCommand(d, form);
@@ -111,19 +135,7 @@ export function demoRoutes(deps: Deps) {
       return c.json({ error: "Send a Slack-shaped interaction payload." }, 400);
     }
     const you = await getPerson(deps.db, session.youPersonId);
-    // The visitor never chooses the workspace, the user, or where receipts go.
-    const payload: Record<string, unknown> = {
-      ...body,
-      team: { id: session.workspaceId },
-      user: { id: you?.slackUserId ?? "U_DANA", username: you?.displayName ?? "you" },
-      response_url: responseUrlFor(session),
-    };
-    if (payload.type === "view_submission" && isObject(payload.view)) {
-      payload.view = {
-        ...payload.view,
-        private_metadata: JSON.stringify({ responseUrl: responseUrlFor(session) }),
-      };
-    }
+    const payload = demoInteractionPayload(body, session, you);
     const d = demoDeps(deps, session);
     const answer = await handleInteraction(d, payload);
     await d.settle();
@@ -137,7 +149,8 @@ export function demoRoutes(deps: Deps) {
       isObject(body) && typeof body.minutes === "number" && Number.isFinite(body.minutes)
         ? body.minutes
         : null;
-    if (minutes === null) return c.json({ error: "Send { minutes: number }." }, 400);
+    if (minutes === null || minutes < 0 || minutes > 1440)
+      return c.json({ error: "Send { minutes: number } between 0 and 1440." }, 400);
     const advanced = await advanceDemoClock(deps, session, minutes * 60 * 1000);
     return c.json(await stateOf(deps, advanced));
   });
