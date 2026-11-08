@@ -82,3 +82,30 @@ export type WorkspaceRow = typeof workspaces.$inferSelect;
 export type PersonRow = typeof people.$inferSelect;
 export type StatusRow = typeof statuses.$inferSelect;
 export type TargetRow = typeof statusTargets.$inferSelect;
+
+/** A visitor's hour in the demo. `id` is random; the workspace it owns is `demo:<id>`. */
+export const demoSessions = sqliteTable("demo_sessions", {
+  id: text("id").primaryKey(),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  /** Added to the real clock for every request in this session (the emulator's "advance time"). */
+  clockOffsetMs: integer("clock_offset_ms").notNull().default(0),
+  youPersonId: text("you_person_id").notNull(),
+});
+
+/** Everything the fake Slack was asked to do, in order: `view` (views.open), `response` (response_url post), `status` (profile status set or cleared). */
+export const demoEvents = sqliteTable(
+  "demo_events",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    seq: integer("seq").notNull(),
+    kind: text("kind").notNull(),
+    payload: text("payload").notNull(),
+    at: integer("at").notNull(),
+  },
+  (t) => [index("demo_events_session_seq_idx").on(t.sessionId, t.seq)],
+);
+
+export type DemoSessionRow = typeof demoSessions.$inferSelect;
+export type DemoEventRow = typeof demoEvents.$inferSelect;
