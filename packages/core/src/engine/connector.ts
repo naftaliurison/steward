@@ -1,6 +1,15 @@
 export type WriteSpec = { system: string; op: string; args: Record<string, unknown> };
 
-export type ConnectorCtx = { workspaceId: string; personId: string; userToken: string | null };
+export type ConnectorCtx = {
+  workspaceId: string;
+  personId: string;
+  userToken: string | null;
+  /** The target's idempotency key, so a connector can make its external write safe to retry. */
+  idempotencyKey: string;
+};
+
+/** What callers build: who is acting, before the engine knows which target it is for. */
+export type ActorCtx = Omit<ConnectorCtx, "idempotencyKey">;
 
 /** One external system. `perform` does the write; `undo` reverses it. */
 export interface Connector {

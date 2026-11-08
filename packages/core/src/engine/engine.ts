@@ -2,7 +2,7 @@ import { eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { audit, statusTargets, type TargetRow } from "../db/schema";
 import { newId } from "../ids";
-import { type ConnectorCtx, type ConnectorRegistry, SkipWrite, type WriteSpec } from "./connector";
+import { type ActorCtx, type ConnectorRegistry, SkipWrite, type WriteSpec } from "./connector";
 
 export type TargetState = "pending" | "done" | "failed" | "skipped" | "undone";
 
@@ -45,11 +45,12 @@ type Patch = { state: TargetState; externalId?: string | null; lastError: string
 
 async function record(
   db: Db,
-  ctx: ConnectorCtx,
+  ctx: ActorCtx,
   target: TargetRow,
   action: string,
   patch: Patch,
   at: number,
+  result: string = patch.state,
 ): Promise<void> {
   await db
     .update(statusTargets)
@@ -60,7 +61,7 @@ async function record(
     workspaceId: ctx.workspaceId,
     personId: ctx.personId,
     action,
-    result: patch.state,
+    result,
     detail: patch.lastError,
     at,
     idempotencyKey: target.idempotencyKey,
@@ -71,7 +72,7 @@ async function record(
 export async function executeTargets(
   db: Db,
   registry: ConnectorRegistry,
-  ctx: ConnectorCtx,
+  ctx: ActorCtx,
   targets: TargetRow[],
   now: () => number,
 ): Promise<TargetRow[]> {
@@ -84,7 +85,10 @@ export async function executeTargets(
       patch = { state: "skipped", lastError: `no connector for ${target.system}` };
     } else {
       try {
-        const { externalId } = await connector.perform(spec, ctx);
+        const { externalId } = await connector.perform(spec, {
+          ...ctx,
+          idempotencyKey: target.idempotencyKey,
+        });
         patch = { state: "done", externalId, lastError: null };
       } catch (err) {
         patch =
@@ -105,7 +109,7 @@ export async function executeTargets(
 export async function undoTargets(
   db: Db,
   registry: ConnectorRegistry,
-  ctx: ConnectorCtx,
+  ctx: ActorCtx,
   targets: TargetRow[],
   now: () => number,
 ): Promise<TargetRow[]> {
@@ -119,17 +123,23 @@ export async function undoTargets(
     const spec = JSON.parse(target.spec) as WriteSpec;
     const connector = registry.get(target.system);
     let patch: Patch;
+    let result: string | undefined;
     if (!connector) {
+      result = "undo_failed";
       patch = { state: "done", lastError: `no connector for ${target.system}; could not undo` };
     } else {
       try {
-        await connector.undo(target.externalId ?? "", spec, ctx);
+        await connector.undo(target.externalId ?? "", spec, {
+          ...ctx,
+          idempotencyKey: target.idempotencyKey,
+        });
         patch = { state: "undone", lastError: null };
       } catch (err) {
+        result = "undo_failed";
         patch = { state: "done", lastError: `undo didn't go through — ${errorMessage(err)}` };
       }
     }
-    await record(db, ctx, target, action, patch, now());
+    await record(db, ctx, target, action, patch, now(), result);
   }
   return targetsById(
     db,

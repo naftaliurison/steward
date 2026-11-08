@@ -4,6 +4,7 @@ import type { Db } from "../db/client";
 import { audit, statuses } from "../db/schema";
 import { createTestDb } from "../testing";
 import {
+  type ActorCtx,
   type Connector,
   type ConnectorCtx,
   ConnectorRegistry,
@@ -15,22 +16,26 @@ import { createTargets, executeTargets, targetsForStatus, undoTargets } from "./
 class RecordingConnector implements Connector {
   performed: WriteSpec[] = [];
   undone: string[] = [];
+  keysSeen: { op: "perform" | "undo"; key: string }[] = [];
   constructor(
     readonly system: string,
-    private readonly behaviour: "ok" | "fail" | "skip" = "ok",
+    private readonly behaviour: "ok" | "fail" | "skip" | "undoFails" = "ok",
   ) {}
-  async perform(spec: WriteSpec): Promise<{ externalId: string }> {
+  async perform(spec: WriteSpec, ctx: ConnectorCtx): Promise<{ externalId: string }> {
+    this.keysSeen.push({ op: "perform", key: ctx.idempotencyKey });
     if (this.behaviour === "fail") throw new Error("rate limited by the other side");
     if (this.behaviour === "skip") throw new SkipWrite("not connected yet");
     this.performed.push(spec);
     return { externalId: `ext-${this.performed.length}` };
   }
-  async undo(externalId: string): Promise<void> {
+  async undo(externalId: string, _spec: WriteSpec, ctx: ConnectorCtx): Promise<void> {
+    this.keysSeen.push({ op: "undo", key: ctx.idempotencyKey });
+    if (this.behaviour === "undoFails") throw new Error("remote said no");
     this.undone.push(externalId);
   }
 }
 
-const ctx: ConnectorCtx = { workspaceId: "T1", personId: "T1:U1", userToken: "xoxp" };
+const ctx: ActorCtx = { workspaceId: "T1", personId: "T1:U1", userToken: "xoxp" };
 const now = () => 1_700_000_000_000;
 
 describe("engine", () => {
@@ -124,5 +129,53 @@ describe("engine", () => {
     const once = await executeTargets(db, registry, ctx, created, now);
     await executeTargets(db, registry, ctx, once, now);
     expect(a.performed).toHaveLength(1);
+  });
+
+  it("hands connectors the target's idempotency key on perform and undo", async () => {
+    const a = new RecordingConnector("a");
+    const registry = new ConnectorRegistry().register(a);
+    const created = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    const done = await executeTargets(db, registry, ctx, created, now);
+    await undoTargets(db, registry, ctx, done, now);
+    expect(a.keysSeen).toEqual([
+      { op: "perform", key: "S1:a:set" },
+      { op: "undo", key: "S1:a:set" },
+    ]);
+  });
+
+  it("keeps a target done and audits undo_failed when the connector's undo throws", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a", "undoFails"));
+    const created = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    const done = await executeTargets(db, registry, ctx, created, now);
+    const [after] = await undoTargets(db, registry, ctx, done, now);
+    expect(after?.state).toBe("done");
+    expect(after?.lastError?.startsWith("undo didn't go through — remote said no")).toBe(true);
+    const rows = await db.select().from(audit).where(eq(audit.action, "a.set.undo"));
+    expect(rows.map((r) => r.result)).toEqual(["undo_failed"]);
+  });
+
+  it("keeps a target done and audits undo_failed when no connector is registered for undo", async () => {
+    const created = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    const done = await executeTargets(
+      db,
+      new ConnectorRegistry().register(new RecordingConnector("a")),
+      ctx,
+      created,
+      now,
+    );
+    const [after] = await undoTargets(db, new ConnectorRegistry(), ctx, done, now);
+    expect(after?.state).toBe("done");
+    expect(after?.lastError).toContain("no connector");
+    const rows = await db.select().from(audit).where(eq(audit.action, "a.set.undo"));
+    expect(rows.map((r) => r.result)).toEqual(["undo_failed"]);
+  });
+
+  it("counts attempts: 1 after execute, 2 after undo", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a"));
+    const created = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    const done = await executeTargets(db, registry, ctx, created, now);
+    expect(done[0]?.attempts).toBe(1);
+    const undone = await undoTargets(db, registry, ctx, done, now);
+    expect(undone[0]?.attempts).toBe(2);
   });
 });

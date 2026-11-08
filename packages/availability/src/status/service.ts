@@ -1,5 +1,5 @@
 import {
-  type ConnectorCtx,
+  type ActorCtx,
   type ConnectorRegistry,
   createTargets,
   type Db,
@@ -22,7 +22,7 @@ export const UNDO_WINDOW_MS = 5 * 60 * 1000;
 export type AvailabilityDeps = { db: Db; registry: ConnectorRegistry; now: () => number };
 export type SaveResult = { status: StatusRow; targets: TargetRow[] };
 
-function ctxFor(person: PersonRow, userToken: string | null): ConnectorCtx {
+function ctxFor(person: PersonRow, userToken: string | null): ActorCtx {
   return { workspaceId: person.workspaceId, personId: person.id, userToken };
 }
 

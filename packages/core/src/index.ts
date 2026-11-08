@@ -10,7 +10,7 @@ export {
 } from "./db/repo";
 export type { PersonRow, StatusRow, TargetRow, WorkspaceRow } from "./db/schema";
 export * as schema from "./db/schema";
-export type { Connector, ConnectorCtx, WriteSpec } from "./engine/connector";
+export type { ActorCtx, Connector, ConnectorCtx, WriteSpec } from "./engine/connector";
 export { ConnectorRegistry, SkipWrite } from "./engine/connector";
 export type { TargetState } from "./engine/engine";
 export { createTargets, executeTargets, targetsForStatus, undoTargets } from "./engine/engine";
