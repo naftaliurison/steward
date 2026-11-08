@@ -53,6 +53,7 @@ export async function saveStatus(
   const startMs = zonedTimeToEpochMs(input.from, "00:00", person.tz);
   const endMs = zonedTimeToEpochMs(nextDay(input.to), "00:00", person.tz);
   const previous = await activeStatusFor(deps.db, person.id);
+  const state = startMs <= now ? "active" : "scheduled";
   const status: StatusRow = {
     id: newId(),
     workspaceId: person.workspaceId,
@@ -62,11 +63,11 @@ export async function saveStatus(
     endMs,
     text: input.text,
     emoji: input.emoji,
-    state: startMs <= now ? "active" : "scheduled",
+    state,
     source: "form",
     createdAt: now,
     undoUntilMs: now + UNDO_WINDOW_MS,
-    replacedStatusId: previous?.id ?? null,
+    replacedStatusId: state === "active" ? (previous?.id ?? null) : null,
   };
   if (previous && status.state === "active") {
     await deps.db
@@ -100,7 +101,12 @@ export async function undoStatus(
     return { error: "That status isn't yours or no longer exists." };
   if (status.state === "cancelled")
     return { status, targets: await targetsForStatus(deps.db, status.id) };
-  if (status.undoUntilMs === null || status.undoUntilMs < deps.now()) {
+  if (status.state !== "active" && status.state !== "scheduled") {
+    return {
+      error: "That status was already replaced by a newer one — undo the newer one instead.",
+    };
+  }
+  if (status.undoUntilMs === null || status.undoUntilMs <= deps.now()) {
     return { error: "The five-minute undo window has passed." };
   }
   const targets = await undoTargets(
@@ -110,6 +116,8 @@ export async function undoStatus(
     await targetsForStatus(deps.db, status.id),
     deps.now,
   );
+  // A write that stayed `done` was not reversed: keep the status as it is so the card says so and offers Undo again.
+  if (targets.some((t) => t.state === "done")) return { status, targets };
   await deps.db
     .update(schema.statuses)
     .set({ state: "cancelled", undoUntilMs: null })

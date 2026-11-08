@@ -23,7 +23,7 @@ export class SlackStatusConnector implements Connector {
   }
 
   async undo(_externalId: string, _spec: WriteSpec, ctx: ConnectorCtx): Promise<void> {
-    if (!ctx.userToken) return;
+    if (!ctx.userToken) throw new Error("Slack isn't connected for you — nothing was cleared");
     await this.slack.clearUserStatus({ userToken: ctx.userToken });
   }
 }
