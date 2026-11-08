@@ -9,7 +9,7 @@ import {
   upsertWorkspace,
 } from "@steward/core";
 import { eq, like } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app";
 import {
   advanceDemoClock,
@@ -17,6 +17,7 @@ import {
   createDemoSession,
   DEMO_MAX_ADVANCE_MS,
   DEMO_MAX_LIVE_SESSIONS,
+  DEMO_ORPHAN_GRACE_MS,
   DEMO_SESSION_TTL_MS,
   demoDeps,
   demoWorkspaceId,
@@ -93,7 +94,13 @@ describe("demo sessions", () => {
         throw new Error("boom");
       })(),
     );
-    await expect(d.settle()).resolves.toBeUndefined();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(d.settle()).resolves.toBeUndefined();
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
     expect(ran).toBe(true);
     expect(nestedRan).toBe(true);
     expect(rejectedRan).toBe(true);
@@ -110,7 +117,28 @@ describe("demo sessions", () => {
     expect(await createDemoSession(deps, {})).toEqual({ error: "busy" });
   });
 
-  it("a failed seed leaves nothing behind", async () => {
+  it("a rejection nobody has awaited yet is not an unhandled rejection", async () => {
+    const deps = testDeps();
+    const s = await createDemoSession(deps, {});
+    if ("error" in s) throw new Error("unexpected busy");
+    const d = demoDeps(deps, s);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      d.defer(Promise.reject(new Error("early")));
+      await new Promise((r) => setTimeout(r, 20));
+      await d.settle();
+      expect(unhandled).toEqual([]);
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errSpy.mockRestore();
+    }
+  });
+
+  it("a seal failure leaves nothing behind", async () => {
     const deps = testDeps();
     await expect(createDemoSession({ ...deps, tokenKey: "not-a-key" }, {})).rejects.toThrow();
     expect(
@@ -119,17 +147,50 @@ describe("demo sessions", () => {
     expect(await deps.db.select().from(schema.people)).toHaveLength(0);
   });
 
-  it("cleanup sweeps a demo workspace that has no session row", async () => {
+  it("a failure after the workspace and people exist rolls everything back and rethrows", async () => {
     const deps = testDeps();
-    await upsertWorkspace(deps.db, {
+    const real = deps.db;
+    const failing = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === "insert") {
+          return (table: unknown) => {
+            if (table === schema.demoSessions) throw new Error("boom");
+            return target.insert(table as never);
+          };
+        }
+        const v = Reflect.get(target, prop, receiver);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    await expect(createDemoSession({ ...deps, db: failing }, {})).rejects.toThrow("boom");
+    expect(
+      await real.select().from(schema.workspaces).where(like(schema.workspaces.id, "demo:%")),
+    ).toHaveLength(0);
+    expect(await real.select().from(schema.people)).toHaveLength(0);
+    expect(await real.select().from(schema.demoSessions)).toHaveLength(0);
+  });
+
+  const insertOrphan = async (deps: ReturnType<typeof testDeps>, installedAt: number) =>
+    upsertWorkspace(deps.db, {
       id: "demo:orphan",
       name: "Acme (demo)",
       botTokenSealed: await seal(deps.tokenKey, "xoxb-demo"),
       botUserId: "U_STEWARD",
-      installedAt: NOW,
+      installedAt,
     });
+
+  it("cleanup sweeps a demo workspace that has no session row once it is past the grace", async () => {
+    const deps = testDeps();
+    await insertOrphan(deps, NOW - DEMO_ORPHAN_GRACE_MS - 1);
     expect(await cleanupDemoSessions(deps)).toBe(0);
     expect(await getWorkspace(deps.db, "demo:orphan")).toBeNull();
+  });
+
+  it("cleanup leaves a recent session-less demo workspace alone (a create may be in flight)", async () => {
+    const deps = testDeps();
+    await insertOrphan(deps, NOW);
+    expect(await cleanupDemoSessions(deps)).toBe(0);
+    expect(await getWorkspace(deps.db, "demo:orphan")).not.toBeNull();
   });
 
   it("cleanup removes expired sessions and everything they own, and nothing else", async () => {
@@ -161,6 +222,36 @@ describe("demo sessions", () => {
       installedAt: NOW,
     });
     const real = await ensurePerson(deps.db, "T_REAL", "U_REAL", "Real");
+    await deps.db.insert(schema.statuses).values({
+      id: "S_REAL",
+      workspaceId: "T_REAL",
+      personId: real.id,
+      type: "out",
+      startMs: NOW,
+      endMs: NOW + 1000,
+      text: "",
+      emoji: "",
+      state: "scheduled",
+      source: "form",
+      createdAt: NOW,
+    });
+    await deps.db.insert(schema.statusTargets).values({
+      id: "ST_REAL",
+      statusId: "S_REAL",
+      system: "slack",
+      op: "set",
+      spec: "{}",
+      state: "done",
+      idempotencyKey: "k-real",
+    });
+    await deps.db.insert(schema.audit).values({
+      id: "A_REAL",
+      workspaceId: "T_REAL",
+      personId: real.id,
+      action: "set",
+      result: "ok",
+      at: NOW,
+    });
 
     const counts = async (ws: string, sessionId: string) => {
       const statuses = await deps.db
@@ -212,6 +303,13 @@ describe("demo sessions", () => {
     expect(await counts(fresh.workspaceId, fresh.id)).toEqual(freshBefore);
     expect(await getWorkspace(deps.db, "T_REAL")).not.toBeNull();
     expect(await getPerson(deps.db, real.id)).not.toBeNull();
+    expect(await counts("T_REAL", "none")).toEqual({
+      statuses: 1,
+      targets: 1,
+      audit: 1,
+      people: 1,
+      events: 0,
+    });
     expect(await cleanupDemoSessions(deps)).toBe(0);
   });
 });

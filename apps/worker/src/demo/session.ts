@@ -9,7 +9,7 @@ import {
   updatePersonProfile,
   upsertWorkspace,
 } from "@steward/core";
-import { and, eq, gt, inArray, like, lte } from "drizzle-orm";
+import { and, eq, gt, inArray, like, lte, notInArray, sql } from "drizzle-orm";
 import type { Deps } from "../deps";
 import { isKnownTimeZone } from "../people";
 import { DemoSlackClient } from "./slackClient";
@@ -17,6 +17,8 @@ import { DemoSlackClient } from "./slackClient";
 export const DEMO_SESSION_TTL_MS = 60 * 60 * 1000;
 export const DEMO_MAX_LIVE_SESSIONS = 200;
 export const DEMO_MAX_ADVANCE_MS = 24 * 60 * 60 * 1000;
+/** A session-less demo workspace younger than this may still be mid-create; the sweep leaves it be. */
+export const DEMO_ORPHAN_GRACE_MS = 5 * 60 * 1000;
 
 /** The sample team. The first one is "you"; their zone follows the visitor's browser. */
 export const DEMO_PEOPLE = [
@@ -139,17 +141,16 @@ export function demoDeps(deps: Deps, session: DemoSession): Deps & { settle: () 
     now,
     slack: new DemoSlackClient(deps.db, session.id, now),
     defer: (work) => {
-      pending.push(work);
+      // Handle the rejection right away so it is never unhandled while it waits for settle().
+      pending.push(
+        work.catch((err) => {
+          console.error("demo deferred work failed", { session: session.id, err });
+        }),
+      );
     },
     settle: async () => {
       while (pending.length > 0) {
-        const batch = pending.splice(0);
-        const results = await Promise.allSettled(batch);
-        for (const r of results) {
-          if (r.status === "rejected") {
-            console.error("demo deferred work failed", { session: session.id, err: r.reason });
-          }
-        }
+        await Promise.all(pending.splice(0));
       }
     },
   };
@@ -179,7 +180,7 @@ export async function deleteDemoWorkspace(db: Db, sessionId: string): Promise<vo
 
 /**
  * Deletes every expired session and all rows its workspace owns, and sweeps demo workspaces whose
- * session row is gone (a seed that died half way). Returns how many expired sessions went.
+ * session row is gone and that are older than the grace (a seed that died half way). Returns how many expired sessions went.
  */
 export async function cleanupDemoSessions(deps: Pick<Deps, "db" | "now">): Promise<number> {
   const expired = await deps.db
@@ -195,21 +196,32 @@ export async function cleanupDemoSessions(deps: Pick<Deps, "db" | "now">): Promi
       console.error("demo cleanup failed", { session: s.id, err });
     }
   }
-  const workspaces = await deps.db
-    .select({ id: schema.workspaces.id })
-    .from(schema.workspaces)
-    .where(like(schema.workspaces.id, "demo:%"));
-  for (const w of workspaces) {
-    const sessionId = w.id.slice("demo:".length);
-    try {
-      const rows = await deps.db
-        .select({ id: schema.demoSessions.id })
-        .from(schema.demoSessions)
-        .where(eq(schema.demoSessions.id, sessionId));
-      if (rows.length === 0) await deleteDemoWorkspace(deps.db, sessionId);
-    } catch (err) {
-      console.error("demo orphan sweep failed", { session: sessionId, err });
+  try {
+    const orphans = await deps.db
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      .where(
+        and(
+          like(schema.workspaces.id, "demo:%"),
+          lte(schema.workspaces.installedAt, deps.now() - DEMO_ORPHAN_GRACE_MS),
+          notInArray(
+            schema.workspaces.id,
+            deps.db
+              .select({ id: sql<string>`'demo:' || ${schema.demoSessions.id}` })
+              .from(schema.demoSessions),
+          ),
+        ),
+      );
+    for (const w of orphans) {
+      const sessionId = w.id.slice("demo:".length);
+      try {
+        await deleteDemoWorkspace(deps.db, sessionId);
+      } catch (err) {
+        console.error("demo orphan sweep failed", { session: sessionId, err });
+      }
     }
+  } catch (err) {
+    console.error("demo orphan sweep query failed", { err });
   }
   return removed;
 }
