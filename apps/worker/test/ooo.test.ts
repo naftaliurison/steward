@@ -1,5 +1,6 @@
 import { STATUS_MODAL_CALLBACK, UNDO_ACTION, zonedTimeToEpochMs } from "@steward/availability";
-import type { Block } from "@steward/core";
+import { type Block, schema } from "@steward/core";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { flush, NOW, seedWorkspace, slackPost, type TestDeps, TZ, testDeps } from "./helpers";
@@ -162,7 +163,7 @@ describe("/ooo", () => {
     expect(deps.slack.statuses.get("xoxp-dana")).not.toBeNull();
   });
 
-  it("a failing save is reported instead of swallowed", async () => {
+  it("a failing Slack write shows an honest ❌ line", async () => {
     await seedWorkspace(deps);
     deps.slack.failNext.setUserStatus = "ratelimited";
     await slackPost(app, "/slack/interactions", {
@@ -174,12 +175,57 @@ describe("/ooo", () => {
     );
   });
 
-  it("does not throw out of the deferred work when even the receipt can't be sent", async () => {
+  async function corruptToken() {
+    await deps.db
+      .update(schema.people)
+      .set({ userTokenSealed: "not-a-sealed-token" })
+      .where(eq(schema.people.id, "T1:U_DANA"));
+  }
+
+  it("a save that throws is reported honestly", async () => {
+    await seedWorkspace(deps);
+    await corruptToken();
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+    });
+    await flush(deps);
+    expect(deps.slack.responses).toHaveLength(1);
+    expect(deps.slack.responses[0]?.text).toMatch(/^Your status didn't save — /);
+    expect(deps.slack.statuses.size).toBe(0);
+  });
+
+  it("a lost receipt after a successful save says nothing misleading", async () => {
     await seedWorkspace(deps);
     deps.slack.failNext.respond = "http_500";
     await slackPost(app, "/slack/interactions", {
       payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
     });
     await expect(flush(deps)).resolves.toBeUndefined();
+    expect(deps.slack.statuses.get("xoxp-dana")).toBeTruthy();
+    expect(deps.slack.responses.some((r) => r.text?.includes("didn't save"))).toBe(false);
+  });
+
+  it("an undo that throws is reported honestly", async () => {
+    await seedWorkspace(deps);
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+    });
+    await flush(deps);
+    const saved = deps.slack.statuses.get("xoxp-dana");
+    const statusId = undoValue(deps.slack.responses[0]?.blocks ?? []);
+    expect(statusId).toBeTruthy();
+    await corruptToken();
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({
+        type: "block_actions",
+        team: { id: "T1" },
+        user: { id: "U_DANA", username: "dana" },
+        response_url: RESPONSE_URL,
+        actions: [{ action_id: UNDO_ACTION, value: statusId }],
+      }),
+    });
+    await flush(deps);
+    expect(deps.slack.responses.at(-1)?.text).toMatch(/^Undo didn't go through — /);
+    expect(deps.slack.statuses.get("xoxp-dana")).toEqual(saved);
   });
 });

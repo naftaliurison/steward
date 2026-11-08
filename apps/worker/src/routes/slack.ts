@@ -20,6 +20,8 @@ import { Hono } from "hono";
 import type { Deps } from "../deps";
 import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } from "../slackTypes";
 
+const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 type Vars = { Variables: { rawBody: string } };
 
 export function slackRoutes(deps: Deps) {
@@ -105,14 +107,26 @@ export function slackRoutes(deps: Deps) {
       const responseUrl = read.meta.responseUrl;
       deps.defer(
         (async () => {
+          let saved: Awaited<ReturnType<typeof saveStatus>>;
+          let person: Awaited<ReturnType<typeof personAndToken>>["person"];
           try {
-            const { person, userToken } = await personAndToken();
-            const saved = await saveStatus(availability, person, read.input, userToken);
-            const card = resultCard({ ...saved, tz: person.tz, now: deps.now() });
-            if (responseUrl) await deps.slack.respond({ responseUrl, ...card });
+            const pt = await personAndToken();
+            person = pt.person;
+            saved = await saveStatus(availability, person, read.input, pt.userToken);
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            await tellUser(responseUrl, `Your status didn't save — ${message}. Please try again.`);
+            await tellUser(
+              responseUrl,
+              `Your status didn't save â€” ${errorMessage(err)}. Please try again.`,
+            );
+            return;
+          }
+          try {
+            if (responseUrl) {
+              const card = resultCard({ ...saved, tz: person.tz, now: deps.now() });
+              await deps.slack.respond({ responseUrl, ...card });
+            }
+          } catch {
+            // The status is saved; a lost receipt is not worth a misleading message.
           }
         })(),
       );
@@ -126,9 +140,17 @@ export function slackRoutes(deps: Deps) {
         const statusId = action.value;
         deps.defer(
           (async () => {
+            let person: Awaited<ReturnType<typeof personAndToken>>["person"];
+            let result: Awaited<ReturnType<typeof undoStatus>>;
             try {
-              const { person, userToken } = await personAndToken();
-              const result = await undoStatus(availability, statusId, person, userToken);
+              const pt = await personAndToken();
+              person = pt.person;
+              result = await undoStatus(availability, statusId, person, pt.userToken);
+            } catch (err) {
+              await tellUser(response_url, `Undo didn't go through â€” ${errorMessage(err)}.`);
+              return;
+            }
+            try {
               if ("error" in result) {
                 await deps.slack.respond({ responseUrl: response_url, text: result.error });
               } else {
@@ -139,9 +161,8 @@ export function slackRoutes(deps: Deps) {
                   replaceOriginal: true,
                 });
               }
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              await tellUser(response_url, `Undo didn't go through — ${message}.`);
+            } catch {
+              // The undo went through; a lost receipt is not worth a misleading message.
             }
           })(),
         );
