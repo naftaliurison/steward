@@ -14,6 +14,6 @@ migrations_dir = "../../packages/core/drizzle"
 [triggers]
 crons = ["* * * * *"]
 
-[vars]
-APP_URL = "http://localhost:8787"
-SLACK_CLIENT_ID = "set-in-dev-vars-or-dashboard"
+# APP_URL and SLACK_CLIENT_ID are not set here on purpose: a `[vars]` table would overwrite
+# production values on every deploy. Locally they come from .dev.vars (see .dev.vars.example);
+# in production set them once with `wrangler secret put APP_URL` and `wrangler secret put SLACK_CLIENT_ID`.

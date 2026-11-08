@@ -27,7 +27,7 @@ export type TestDeps = Deps & {
   deferred: Promise<unknown>[];
 };
 
-export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
+export function testDeps(overrides: Partial<Omit<Deps, "slack" | "db" | "defer">> = {}): TestDeps {
   const clock = { now: NOW };
   const deferred: Promise<unknown>[] = [];
   return {

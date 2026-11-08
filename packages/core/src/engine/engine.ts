@@ -50,7 +50,7 @@ async function record(
   action: string,
   patch: Patch,
   at: number,
-  result: string = patch.state,
+  result: TargetState | "undo_failed" = patch.state,
 ): Promise<void> {
   await db
     .update(statusTargets)
@@ -123,7 +123,7 @@ export async function undoTargets(
     const spec = JSON.parse(target.spec) as WriteSpec;
     const connector = registry.get(target.system);
     let patch: Patch;
-    let result: string | undefined;
+    let result: TargetState | "undo_failed" | undefined;
     if (!connector) {
       result = "undo_failed";
       patch = { state: "done", lastError: `no connector for ${target.system}; could not undo` };
