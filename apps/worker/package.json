@@ -1,0 +1,23 @@
+{
+  "name": "@steward/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply steward --local",
+    "db:migrate:remote": "wrangler d1 migrations apply steward --remote"
+  },
+  "dependencies": {
+    "@steward/availability": "workspace:*",
+    "@steward/core": "workspace:*",
+    "drizzle-orm": "^0.44.0",
+    "hono": "^4.9.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251001.0",
+    "wrangler": "^4.40.0"
+  }
+}

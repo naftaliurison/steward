@@ -12,7 +12,7 @@ function b64decode(s: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }
 
-async function importKey(keyB64: string, usage: KeyUsage): Promise<CryptoKey> {
+async function importKey(keyB64: string, usage: "encrypt" | "decrypt"): Promise<CryptoKey> {
   const raw = b64decode(keyB64);
   if (raw.byteLength !== 32) throw new Error("TOKEN_KEY must be 32 bytes, base64-encoded");
   return crypto.subtle.importKey("raw", raw, "AES-GCM", false, [usage]);
