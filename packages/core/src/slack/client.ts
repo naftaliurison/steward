@@ -60,7 +60,13 @@ export function assertTrustedResponseUrl(responseUrl: string): void {
   } catch {
     throw new SlackApiError("response_url", "untrusted_url");
   }
-  if (url.protocol !== "https:" || url.hostname !== "hooks.slack.com") {
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "hooks.slack.com" ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== ""
+  ) {
     throw new SlackApiError("response_url", "untrusted_url");
   }
 }

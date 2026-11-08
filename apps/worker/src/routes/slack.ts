@@ -23,6 +23,7 @@ import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } f
 
 export const SAVE_FAILED = "Your status didn't save. Please try again in a moment.";
 export const UNDO_FAILED = "Undo didn't go through. Please try again in a moment.";
+export const LOOKUP_FAILED = "Steward couldn't reach its records. Please try again in a moment.";
 const BOT_TOKEN_UNREADABLE =
   "Steward can't reach Slack for this workspace right now. Ask whoever installed it to reinstall Steward.";
 
@@ -52,12 +53,6 @@ export function slackRoutes(deps: Deps) {
     const workspace = await getWorkspace(deps.db, form.get("team_id") ?? "");
     if (!workspace) return c.text("Steward isn't installed in this workspace yet.");
     const userId = form.get("user_id") ?? "";
-    const person = await personForSlackUser(
-      deps,
-      workspace,
-      userId,
-      form.get("user_name") ?? userId,
-    );
     let botToken: string;
     try {
       botToken = await open(deps.tokenKey, workspace.botTokenSealed);
@@ -65,14 +60,25 @@ export function slackRoutes(deps: Deps) {
       console.error("bot token unreadable", { workspace: workspace.id, err });
       return c.text(BOT_TOKEN_UNREADABLE);
     }
-    await deps.slack.openView({
-      botToken,
-      triggerId: form.get("trigger_id") ?? "",
-      view: buildStatusModal({
-        today: todayIn(person.tz, deps.now()),
-        responseUrl: form.get("response_url") ?? "",
-      }),
-    });
+    try {
+      const person = await personForSlackUser(
+        deps,
+        workspace,
+        userId,
+        form.get("user_name") ?? userId,
+      );
+      await deps.slack.openView({
+        botToken,
+        triggerId: form.get("trigger_id") ?? "",
+        view: buildStatusModal({
+          today: todayIn(person.tz, deps.now()),
+          responseUrl: form.get("response_url") ?? "",
+        }),
+      });
+    } catch (err) {
+      console.error("could not open the status form", { workspace: workspace.id, err });
+      return c.text("Steward couldn't open the form just now. Please try /ooo again.");
+    }
     return c.text("");
   });
 
@@ -120,7 +126,7 @@ export function slackRoutes(deps: Deps) {
         console.error("person lookup failed", { user: payload.user.id, err });
         return c.json({
           response_action: "errors",
-          errors: { type: "Steward couldn't reach its records. Please try again in a moment." },
+          errors: { type: LOOKUP_FAILED },
         });
       }
       const read = readStatusSubmission(view, { today: todayIn(person.tz, deps.now()) });

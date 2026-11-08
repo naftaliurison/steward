@@ -116,6 +116,11 @@ describe("RealSlackClient", () => {
     await expect(
       slack.respond({ responseUrl: "http://hooks.slack.com/x", text: "hi" }),
     ).rejects.toEqual(new SlackApiError("response_url", "untrusted_url"));
+    for (const responseUrl of ["https://hooks.slack.com:8443/x", "https://u:p@hooks.slack.com/x"]) {
+      await expect(slack.respond({ responseUrl, text: "hi" })).rejects.toEqual(
+        new SlackApiError("response_url", "untrusted_url"),
+      );
+    }
     await expect(slack.respond({ responseUrl: "not a url", text: "hi" })).rejects.toEqual(
       new SlackApiError("response_url", "untrusted_url"),
     );

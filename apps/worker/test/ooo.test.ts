@@ -3,7 +3,7 @@ import { type Block, schema } from "@steward/core";
 import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
-import { SAVE_FAILED, UNDO_FAILED } from "../src/routes/slack";
+import { LOOKUP_FAILED, SAVE_FAILED, UNDO_FAILED } from "../src/routes/slack";
 import { flush, NOW, seedWorkspace, slackPost, type TestDeps, TZ, testDeps } from "./helpers";
 
 const RESPONSE_URL = "https://hooks.slack.com/commands/T1/1/r1";
@@ -248,10 +248,36 @@ describe("/ooo", () => {
     const res = await slackPost(app, "/slack/interactions", { payload: "not json" });
     expect(res.status).toBe(200);
     expect(deps.deferred).toHaveLength(0);
-    const noUser = await slackPost(app, "/slack/interactions", {
-      payload: JSON.stringify({ type: "x" }),
+    for (const payload of [
+      JSON.stringify({ type: "x" }),
+      JSON.stringify({ type: "view_submission", team: { id: "T1" } }),
+      "null",
+      '"x"',
+    ]) {
+      const bad = await slackPost(app, "/slack/interactions", { payload });
+      expect(bad.status).toBe(200);
+    }
+    expect(deps.deferred).toHaveLength(0);
+    expect(deps.slack.openedViews).toHaveLength(0);
+    expect(deps.slack.responses).toHaveLength(0);
+  });
+
+  it("answers /ooo plainly when the form can't be opened", async () => {
+    await seedWorkspace(deps);
+    deps.slack.failNext.openView = "expired_trigger_id";
+    const res = await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      text: "",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "t",
+      response_url: RESPONSE_URL,
     });
-    expect(noUser.status).toBe(200);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(
+      "Steward couldn't open the form just now. Please try /ooo again.",
+    );
   });
 
   it("answers /ooo plainly when the workspace's bot token can't be read", async () => {
@@ -282,7 +308,7 @@ describe("/ooo", () => {
     });
     expect(await res.json()).toEqual({
       response_action: "errors",
-      errors: { type: "Steward couldn't reach its records. Please try again in a moment." },
+      errors: { type: LOOKUP_FAILED },
     });
     expect(deps.deferred).toHaveLength(0);
   });

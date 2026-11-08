@@ -11,7 +11,13 @@ import { createTestDb } from "@steward/core/testing";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { SlackStatusConnector } from "../connectors/slackStatus";
-import { type AvailabilityDeps, saveStatus, UNDO_WINDOW_MS, undoStatus } from "./service";
+import {
+  type AvailabilityDeps,
+  getStatus,
+  saveStatus,
+  UNDO_WINDOW_MS,
+  undoStatus,
+} from "./service";
 import { zonedTimeToEpochMs } from "./time";
 
 const TZ = "Asia/Jerusalem";
@@ -239,5 +245,11 @@ describe("saveStatus / undoStatus", () => {
     expect(await undoStatus(deps, saved.status.id, stranger, "xoxp-other")).toEqual({
       error: "That status isn't yours or no longer exists.",
     });
+    expect((await getStatus(db, saved.status.id, "T1"))?.id).toBe(saved.status.id);
+    expect(await getStatus(db, saved.status.id, "T2")).toBeNull();
+    // Same personId, so only the workspace filter can reject this one.
+    expect(
+      await undoStatus(deps, saved.status.id, { ...dana, workspaceId: "T2" }, "xoxp-dana"),
+    ).toEqual({ error: "That status isn't yours or no longer exists." });
   });
 });
