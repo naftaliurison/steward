@@ -15,3 +15,22 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm --filter @steward/worker build
+  deploy:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .node-version, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Skip until the Cloudflare secrets exist
+        if: env.CLOUDFLARE_API_TOKEN == ''
+        run: echo "No CLOUDFLARE_API_TOKEN secret; deploy skipped."
+      - name: Apply migrations and deploy
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: pnpm --filter @steward/worker db:migrate:remote && pnpm --filter @steward/worker deploy
