@@ -1,0 +1,1 @@
+ALTER TABLE `people` ADD `profile_synced_at` integer;

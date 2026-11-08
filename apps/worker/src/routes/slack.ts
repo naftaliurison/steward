@@ -9,15 +9,10 @@ import {
   UNDO_ACTION,
   undoStatus,
 } from "@steward/availability";
-import {
-  ConnectorRegistry,
-  ensurePerson,
-  getWorkspace,
-  open,
-  verifySlackSignature,
-} from "@steward/core";
+import { ConnectorRegistry, getWorkspace, open, verifySlackSignature } from "@steward/core";
 import { Hono } from "hono";
 import type { Deps } from "../deps";
+import { personForSlackUser } from "../people";
 import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } from "../slackTypes";
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -48,9 +43,9 @@ export function slackRoutes(deps: Deps) {
     const workspace = await getWorkspace(deps.db, form.get("team_id") ?? "");
     if (!workspace) return c.text("Steward isn't installed in this workspace yet.");
     const userId = form.get("user_id") ?? "";
-    const person = await ensurePerson(
-      deps.db,
-      workspace.id,
+    const person = await personForSlackUser(
+      deps,
+      workspace,
       userId,
       form.get("user_name") ?? userId,
     );
@@ -78,9 +73,9 @@ export function slackRoutes(deps: Deps) {
       now: deps.now,
     };
     const personAndToken = async () => {
-      const person = await ensurePerson(
-        deps.db,
-        workspace.id,
+      const person = await personForSlackUser(
+        deps,
+        workspace,
         payload.user.id,
         payload.user.username ?? payload.user.name ?? payload.user.id,
       );

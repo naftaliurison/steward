@@ -30,4 +30,15 @@ describe("FakeSlackClient", () => {
       slack.setUserStatus({ userToken: "t", text: "x", emoji: ":x:", expiration: 0 }),
     ).resolves.toBeUndefined();
   });
+
+  it("answers users.info from its seeded users and records the calls", async () => {
+    const slack = new FakeSlackClient();
+    slack.users.set("U1", { displayName: "Dana", tz: "Asia/Jerusalem" });
+    expect(await slack.getUserInfo({ botToken: "b", userId: "U1" })).toEqual({
+      displayName: "Dana",
+      tz: "Asia/Jerusalem",
+    });
+    expect(await slack.getUserInfo({ botToken: "b", userId: "U2" })).toBeNull();
+    expect(slack.userInfoCalls).toEqual(["U1", "U2"]);
+  });
 });

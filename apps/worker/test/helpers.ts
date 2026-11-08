@@ -57,8 +57,9 @@ export async function flush(deps: TestDeps): Promise<void> {
 
 export async function seedWorkspace(
   deps: TestDeps,
-  opts: { withUserToken: boolean } = { withUserToken: true },
+  opts: { withUserToken?: boolean; profileSynced?: boolean } = {},
 ): Promise<PersonRow> {
+  const { withUserToken = true, profileSynced = true } = opts;
   await upsertWorkspace(deps.db, {
     id: "T1",
     name: "Acme",
@@ -67,10 +68,16 @@ export async function seedWorkspace(
     installedAt: NOW - 1000,
   });
   let person = await ensurePerson(deps.db, "T1", "U_DANA", "dana");
-  await deps.db.update(schema.people).set({ tz: TZ }).where(eq(schema.people.id, person.id));
-  if (opts.withUserToken)
+  if (profileSynced) {
+    await deps.db
+      .update(schema.people)
+      .set({ tz: TZ, profileSyncedAt: NOW })
+      .where(eq(schema.people.id, person.id));
+    person = { ...person, tz: TZ, profileSyncedAt: NOW };
+  }
+  if (withUserToken)
     person = await setPersonUserToken(deps.db, person.id, await seal(deps.tokenKey, "xoxp-dana"));
-  return { ...person, tz: TZ };
+  return person;
 }
 
 type App = { request: (input: string, init?: RequestInit) => Promise<Response> | Response };

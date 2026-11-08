@@ -1,5 +1,11 @@
 import type { ModalView } from "./blocks";
-import { type RespondArgs, type SetStatusArgs, SlackApiError, type SlackClient } from "./client";
+import {
+  type RespondArgs,
+  type SetStatusArgs,
+  SlackApiError,
+  type SlackClient,
+  type UserProfile,
+} from "./client";
 
 export type FakeStatus = { text: string; emoji: string; expiration: number };
 
@@ -8,6 +14,9 @@ export class FakeSlackClient implements SlackClient {
   openedViews: { triggerId: string; view: ModalView }[] = [];
   responses: RespondArgs[] = [];
   statuses = new Map<string, FakeStatus | null>();
+  /** Seed with `users.set(slackUserId, { displayName, tz })`; unknown users answer null like Slack does. */
+  users = new Map<string, UserProfile>();
+  userInfoCalls: string[] = [];
   /** Set a method name to a Slack error code to make its next call fail once. */
   failNext: Partial<Record<keyof SlackClient, string>> = {};
 
@@ -46,5 +55,11 @@ export class FakeSlackClient implements SlackClient {
   async clearUserStatus(args: { userToken: string }): Promise<void> {
     this.maybeFail("clearUserStatus");
     this.statuses.set(args.userToken, null);
+  }
+
+  async getUserInfo(args: { botToken: string; userId: string }): Promise<UserProfile | null> {
+    this.maybeFail("getUserInfo");
+    this.userInfoCalls.push(args.userId);
+    return this.users.get(args.userId) ?? null;
   }
 }

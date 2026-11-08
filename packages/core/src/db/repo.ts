@@ -47,6 +47,7 @@ export async function ensurePerson(
     displayName,
     tz: "UTC",
     userTokenSealed: null,
+    profileSyncedAt: null,
   };
   await db.insert(people).values(row);
   return row;
@@ -54,6 +55,17 @@ export async function ensurePerson(
 
 export async function setPersonUserToken(db: Db, id: string, sealed: string): Promise<PersonRow> {
   await db.update(people).set({ userTokenSealed: sealed }).where(eq(people.id, id));
+  const row = await getPerson(db, id);
+  if (!row) throw new Error(`person ${id} not found`);
+  return row;
+}
+
+export async function updatePersonProfile(
+  db: Db,
+  id: string,
+  profile: { displayName: string; tz: string; profileSyncedAt: number },
+): Promise<PersonRow> {
+  await db.update(people).set(profile).where(eq(people.id, id));
   const row = await getPerson(db, id);
   if (!row) throw new Error(`person ${id} not found`);
   return row;
