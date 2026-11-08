@@ -13,9 +13,11 @@ export type Deps = {
   slackClientId: string;
   slackClientSecret: string;
   appUrl: string;
+  /** Run this after the response is sent (Slack wants an answer within 3 seconds). */
+  defer: (work: Promise<unknown>) => void;
 };
 
-export function depsFromEnv(env: Env): Deps {
+export function depsFromEnv(env: Env, ctx: ExecutionContext): Deps {
   return {
     db: createD1Db(env.DB),
     slack: new RealSlackClient(fetch),
@@ -26,5 +28,6 @@ export function depsFromEnv(env: Env): Deps {
     slackClientId: env.SLACK_CLIENT_ID,
     slackClientSecret: env.SLACK_CLIENT_SECRET,
     appUrl: env.APP_URL,
+    defer: (work) => ctx.waitUntil(work),
   };
 }

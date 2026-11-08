@@ -2,7 +2,7 @@ import { STATUS_MODAL_CALLBACK, UNDO_ACTION, zonedTimeToEpochMs } from "@steward
 import type { Block } from "@steward/core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
-import { NOW, seedWorkspace, slackPost, type TestDeps, TZ, testDeps } from "./helpers";
+import { flush, NOW, seedWorkspace, slackPost, type TestDeps, TZ, testDeps } from "./helpers";
 
 const RESPONSE_URL = "https://hooks.slack.test/r1";
 
@@ -79,6 +79,7 @@ describe("/ooo", () => {
       payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-17" })),
     });
     expect(await save.json()).toEqual({ response_action: "clear" });
+    await flush(deps);
     expect(deps.slack.statuses.get("xoxp-dana")).toEqual({
       text: "Out of office",
       emoji: ":palm_tree:",
@@ -101,6 +102,7 @@ describe("/ooo", () => {
       }),
     });
     expect(undo.status).toBe(200);
+    await flush(deps);
     expect(deps.slack.statuses.get("xoxp-dana")).toBeNull();
     const replaced = deps.slack.responses[1];
     expect(replaced?.replaceOriginal).toBe(true);
@@ -113,6 +115,7 @@ describe("/ooo", () => {
     await slackPost(app, "/slack/interactions", {
       payload: JSON.stringify(submission({ type: "sick", from: "2026-11-12", to: "2026-11-12" })),
     });
+    await flush(deps);
     expect(deps.slack.statuses.size).toBe(0);
     expect(JSON.stringify(deps.slack.responses[0]?.blocks)).toContain(
       "➖ Slack status skipped — Slack isn't connected",
@@ -128,6 +131,7 @@ describe("/ooo", () => {
       response_action: "errors",
       errors: { to: "The last day can't be before the first" },
     });
+    expect(deps.deferred).toHaveLength(0);
     expect(deps.slack.responses).toHaveLength(0);
   });
 
@@ -136,6 +140,7 @@ describe("/ooo", () => {
     await slackPost(app, "/slack/interactions", {
       payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
     });
+    await flush(deps);
     const statusId = undoValue(deps.slack.responses[0]?.blocks ?? []);
     deps.clock.now = NOW + 6 * 60 * 1000;
     await slackPost(
@@ -152,7 +157,29 @@ describe("/ooo", () => {
       },
       deps.clock.now,
     );
+    await flush(deps);
     expect(deps.slack.responses[1]?.text).toBe("The five-minute undo window has passed.");
     expect(deps.slack.statuses.get("xoxp-dana")).not.toBeNull();
+  });
+
+  it("a failing save is reported instead of swallowed", async () => {
+    await seedWorkspace(deps);
+    deps.slack.failNext.setUserStatus = "ratelimited";
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+    });
+    await flush(deps);
+    expect(JSON.stringify(deps.slack.responses[0]?.blocks)).toContain(
+      "❌ Slack status didn't go through — setUserStatus: ratelimited",
+    );
+  });
+
+  it("does not throw out of the deferred work when even the receipt can't be sent", async () => {
+    await seedWorkspace(deps);
+    deps.slack.failNext.respond = "http_500";
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+    });
+    await expect(flush(deps)).resolves.toBeUndefined();
   });
 });

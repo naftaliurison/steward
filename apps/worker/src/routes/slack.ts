@@ -70,19 +70,31 @@ export function slackRoutes(deps: Deps) {
     ) as InteractionPayload;
     const workspace = await getWorkspace(deps.db, payload.team?.id ?? "");
     if (!workspace) return c.text("");
-    const person = await ensurePerson(
-      deps.db,
-      workspace.id,
-      payload.user.id,
-      payload.user.username ?? payload.user.name ?? payload.user.id,
-    );
-    const userToken = person.userTokenSealed
-      ? await open(deps.tokenKey, person.userTokenSealed)
-      : null;
     const availability = {
       db: deps.db,
       registry: new ConnectorRegistry().register(new SlackStatusConnector(deps.slack)),
       now: deps.now,
+    };
+    const personAndToken = async () => {
+      const person = await ensurePerson(
+        deps.db,
+        workspace.id,
+        payload.user.id,
+        payload.user.username ?? payload.user.name ?? payload.user.id,
+      );
+      const userToken = person.userTokenSealed
+        ? await open(deps.tokenKey, person.userTokenSealed)
+        : null;
+      return { person, userToken };
+    };
+    // Slack wants view_submission and block_actions answered within 3 seconds, so the work runs after the answer.
+    const tellUser = async (responseUrl: string | undefined, text: string) => {
+      if (!responseUrl) return;
+      try {
+        await deps.slack.respond({ responseUrl, text });
+      } catch {
+        // Nothing left to tell the user through.
+      }
     };
 
     if (payload.type === "view_submission") {
@@ -90,10 +102,20 @@ export function slackRoutes(deps: Deps) {
       if (view.callback_id !== STATUS_MODAL_CALLBACK) return c.text("");
       const read = readStatusSubmission(view);
       if (!read.ok) return c.json({ response_action: "errors", errors: read.errors });
-      const saved = await saveStatus(availability, person, read.input, userToken);
-      const card = resultCard({ ...saved, tz: person.tz, now: deps.now() });
-      if (read.meta.responseUrl)
-        await deps.slack.respond({ responseUrl: read.meta.responseUrl, ...card });
+      const responseUrl = read.meta.responseUrl;
+      deps.defer(
+        (async () => {
+          try {
+            const { person, userToken } = await personAndToken();
+            const saved = await saveStatus(availability, person, read.input, userToken);
+            const card = resultCard({ ...saved, tz: person.tz, now: deps.now() });
+            if (responseUrl) await deps.slack.respond({ responseUrl, ...card });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await tellUser(responseUrl, `Your status didn't save — ${message}. Please try again.`);
+          }
+        })(),
+      );
       return c.json({ response_action: "clear" });
     }
 
@@ -101,13 +123,28 @@ export function slackRoutes(deps: Deps) {
       const { actions, response_url } = payload as BlockActionsPayload;
       const action = actions[0];
       if (action?.action_id === UNDO_ACTION && action.value && response_url) {
-        const result = await undoStatus(availability, action.value, person, userToken);
-        if ("error" in result) {
-          await deps.slack.respond({ responseUrl: response_url, text: result.error });
-        } else {
-          const card = resultCard({ ...result, tz: person.tz, now: deps.now() });
-          await deps.slack.respond({ responseUrl: response_url, ...card, replaceOriginal: true });
-        }
+        const statusId = action.value;
+        deps.defer(
+          (async () => {
+            try {
+              const { person, userToken } = await personAndToken();
+              const result = await undoStatus(availability, statusId, person, userToken);
+              if ("error" in result) {
+                await deps.slack.respond({ responseUrl: response_url, text: result.error });
+              } else {
+                const card = resultCard({ ...result, tz: person.tz, now: deps.now() });
+                await deps.slack.respond({
+                  responseUrl: response_url,
+                  ...card,
+                  replaceOriginal: true,
+                });
+              }
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              await tellUser(response_url, `Undo didn't go through — ${message}.`);
+            }
+          })(),
+        );
       }
       return c.text("");
     }

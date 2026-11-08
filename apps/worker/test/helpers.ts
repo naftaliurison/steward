@@ -24,10 +24,12 @@ export type TestDeps = Deps & {
   slack: FakeSlackClient;
   tokenKey: string;
   clock: { now: number };
+  deferred: Promise<unknown>[];
 };
 
 export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
   const clock = { now: NOW };
+  const deferred: Promise<unknown>[] = [];
   return {
     db: createTestDb(),
     slack: new FakeSlackClient(),
@@ -38,9 +40,19 @@ export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
     slackClientId: "client-id",
     slackClientSecret: "client-secret",
     appUrl: "https://steward.example",
+    defer: (work) => {
+      deferred.push(work);
+    },
     clock,
+    deferred,
     ...overrides,
   };
+}
+
+/** Waits for the work the handlers deferred until after their response. */
+export async function flush(deps: TestDeps): Promise<void> {
+  await Promise.all(deps.deferred);
+  deps.deferred.length = 0;
 }
 
 export async function seedWorkspace(
