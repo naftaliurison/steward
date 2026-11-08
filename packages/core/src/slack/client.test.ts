@@ -88,13 +88,13 @@ describe("RealSlackClient", () => {
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer xoxb-1");
   });
 
-  it("returns null for an unknown user and falls back to UTC and the id when fields are missing", async () => {
+  it("returns null for an unknown user and falls back to the id and a null time zone when fields are missing", async () => {
     const unknown = new RealSlackClient(fetchReturning({ ok: false, error: "user_not_found" }));
     expect(await unknown.getUserInfo({ botToken: "x", userId: "U9" })).toBeNull();
     const bare = new RealSlackClient(fetchReturning({ ok: true, user: {} }));
     expect(await bare.getUserInfo({ botToken: "x", userId: "U9" })).toEqual({
       displayName: "U9",
-      tz: "UTC",
+      tz: null,
     });
   });
 

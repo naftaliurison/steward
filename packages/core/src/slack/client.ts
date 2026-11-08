@@ -16,7 +16,11 @@ export type SetStatusArgs = {
   expiration: number;
 };
 
-export type UserProfile = { displayName: string; tz: string };
+/** `tz` is null when the Slack user has none set. */
+export type UserProfile = { displayName: string; tz: string | null };
+
+/** Slack's answer must fit inside the 3-second trigger_id window with room to open the modal. */
+export const USERS_INFO_TIMEOUT_MS = 1500;
 
 type SlackUser = {
   name?: string;
@@ -128,6 +132,7 @@ export class RealSlackClient implements SlackClient {
     const res = await this.fetchFn(url.toString(), {
       method: "GET",
       headers: { authorization: `Bearer ${args.botToken}` },
+      signal: AbortSignal.timeout(USERS_INFO_TIMEOUT_MS),
     });
     const data = await parseJson(res, "users.info");
     if (!data.ok) {
@@ -141,6 +146,6 @@ export class RealSlackClient implements SlackClient {
       user.real_name ||
       user.name ||
       args.userId;
-    return { displayName, tz: user.tz || "UTC" };
+    return { displayName, tz: user.tz ?? null };
   }
 }

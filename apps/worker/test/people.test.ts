@@ -1,6 +1,7 @@
 import { getPerson } from "@steward/core";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
+import { PROFILE_MAX_AGE_MS, PROFILE_RETRY_MS } from "../src/people";
 import { NOW, seedWorkspace, slackPost, testDeps } from "./helpers";
 
 /** 22:30 UTC on 12 Nov is already 00:30 on 13 Nov in Asia/Jerusalem. */
@@ -54,7 +55,40 @@ describe("person profile from Slack", () => {
     const res = await slackPost(app, "/slack/commands", ooo(deps.clock.now), deps.clock.now);
     expect(res.status).toBe(200);
     expect(deps.slack.openedViews).toHaveLength(2);
-    expect((await getPerson(deps.db, "T1:U_DANA"))?.tz).toBe("Asia/Jerusalem");
+    expect(deps.slack.failNext.getUserInfo).toBeUndefined();
+    const kept = await getPerson(deps.db, "T1:U_DANA");
+    expect(kept?.tz).toBe("Asia/Jerusalem");
+    expect(kept?.profileSyncedAt).toBe(deps.clock.now - PROFILE_MAX_AGE_MS + PROFILE_RETRY_MS);
+  });
+
+  it("refreshes the profile after a day", async () => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    await seedWorkspace(deps);
+    deps.slack.users.set("U_DANA", { displayName: "Dana L.", tz: "Europe/Warsaw" });
+
+    deps.clock.now = NOW + 25 * 60 * 60 * 1000;
+    await slackPost(app, "/slack/commands", ooo(deps.clock.now), deps.clock.now);
+    expect(deps.slack.userInfoCalls).toEqual(["U_DANA"]);
+    expect(await getPerson(deps.db, "T1:U_DANA")).toMatchObject({
+      tz: "Europe/Warsaw",
+      displayName: "Dana L.",
+      profileSyncedAt: deps.clock.now,
+    });
+  });
+
+  it("keeps the stored time zone when Slack has none", async () => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    await seedWorkspace(deps, { profileSynced: false });
+    deps.slack.users.set("U_DANA", { displayName: "Dana", tz: null });
+
+    await slackPost(app, "/slack/commands", ooo(NOW), NOW);
+    expect(await getPerson(deps.db, "T1:U_DANA")).toMatchObject({
+      tz: "UTC",
+      displayName: "Dana",
+      profileSyncedAt: NOW,
+    });
   });
 
   it("falls back to UTC and the Slack handle when Slack doesn't know the user", async () => {
@@ -65,8 +99,12 @@ describe("person profile from Slack", () => {
     expect(await getPerson(deps.db, "T1:U_DANA")).toMatchObject({
       tz: "UTC",
       displayName: "dana",
-      profileSyncedAt: null,
+      profileSyncedAt: NOW - PROFILE_MAX_AGE_MS + PROFILE_RETRY_MS,
     });
     expect(initialFromDate(deps, 0)).toBe("2026-11-12");
+    expect(deps.slack.userInfoCalls).toEqual(["U_DANA"]);
+
+    await slackPost(app, "/slack/commands", ooo(NOW), NOW);
+    expect(deps.slack.userInfoCalls).toEqual(["U_DANA"]);
   });
 });
