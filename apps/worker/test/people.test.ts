@@ -1,7 +1,7 @@
 import { getPerson } from "@steward/core";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
-import { PROFILE_MAX_AGE_MS, PROFILE_RETRY_MS } from "../src/people";
+import { isKnownTimeZone, PROFILE_MAX_AGE_MS, PROFILE_RETRY_MS } from "../src/people";
 import { NOW, seedWorkspace, slackPost, testDeps } from "./helpers";
 
 /** 22:30 UTC on 12 Nov is already 00:30 on 13 Nov in Asia/Jerusalem. */
@@ -106,5 +106,29 @@ describe("person profile from Slack", () => {
 
     await slackPost(app, "/slack/commands", ooo(NOW), NOW);
     expect(deps.slack.userInfoCalls).toEqual(["U_DANA"]);
+  });
+
+  it.each(["", "Not/AZone"])("never stores the time zone %j from Slack", async (tz) => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    await seedWorkspace(deps, { profileSynced: false });
+    deps.slack.users.set("U_DANA", { displayName: "Dana Levi", tz });
+
+    const res = await slackPost(app, "/slack/commands", ooo(NOW), NOW);
+    expect(res.status).toBe(200);
+    expect(await getPerson(deps.db, "T1:U_DANA")).toMatchObject({
+      tz: "UTC",
+      displayName: "Dana Levi",
+      profileSyncedAt: NOW,
+    });
+    expect(deps.slack.openedViews).toHaveLength(1);
+  });
+});
+
+describe("isKnownTimeZone", () => {
+  it("accepts IANA zones and refuses everything else", () => {
+    expect(isKnownTimeZone("Asia/Jerusalem")).toBe(true);
+    expect(isKnownTimeZone("")).toBe(false);
+    expect(isKnownTimeZone("Not/AZone")).toBe(false);
   });
 });

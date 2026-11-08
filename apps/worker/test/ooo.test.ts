@@ -312,4 +312,35 @@ describe("/ooo", () => {
     });
     expect(deps.deferred).toHaveLength(0);
   });
+
+  it("validates the dates against the person's today, not UTC's", async () => {
+    const LATE = Date.UTC(2026, 10, 12, 22, 30);
+    const lateDeps = testDeps({ now: () => LATE });
+    const lateApp = createApp(lateDeps);
+    await seedWorkspace(lateDeps);
+
+    const today = await slackPost(
+      lateApp,
+      "/slack/interactions",
+      {
+        payload: JSON.stringify(submission({ type: "out", from: "2026-11-13", to: "2026-11-13" })),
+      },
+      LATE,
+    );
+    expect(await today.json()).toEqual({ response_action: "clear" });
+    await flush(lateDeps);
+
+    const past = await slackPost(
+      lateApp,
+      "/slack/interactions",
+      {
+        payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+      },
+      LATE,
+    );
+    expect(await past.json()).toEqual({
+      response_action: "errors",
+      errors: { to: "The last day has already passed." },
+    });
+  });
 });

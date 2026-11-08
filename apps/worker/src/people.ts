@@ -14,6 +14,16 @@ export const PROFILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** After a failed or empty read, the next attempt waits this long instead of retrying every request. */
 export const PROFILE_RETRY_MS = 60 * 60 * 1000;
 
+/** True when the runtime's ICU knows this IANA zone; anything else must never be stored. */
+export function isKnownTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The person row for a Slack user. Their time zone and display name are read from Slack on first
  * contact and refreshed once a day; a failed or empty read keeps what is stored
@@ -40,7 +50,7 @@ export async function personForSlackUser(
   try {
     return await updatePersonProfile(deps.db, person.id, {
       displayName: profile?.displayName ?? person.displayName,
-      tz: profile?.tz ?? person.tz,
+      tz: profile?.tz && isKnownTimeZone(profile.tz) ? profile.tz : person.tz,
       // No profile: a marker that makes the next attempt come PROFILE_RETRY_MS from now.
       profileSyncedAt: profile ? now : now - PROFILE_MAX_AGE_MS + PROFILE_RETRY_MS,
     });

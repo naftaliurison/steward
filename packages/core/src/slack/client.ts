@@ -166,6 +166,6 @@ export class RealSlackClient implements SlackClient {
       user.real_name ||
       user.name ||
       args.userId;
-    return { displayName, tz: user.tz ?? null };
+    return { displayName, tz: user.tz || null };
   }
 }
