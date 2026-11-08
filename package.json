@@ -7,11 +7,17 @@
     "node": ">=22"
   },
   "scripts": {
-    "lint": "biome check .",
-    "lint:fix": "biome check --write .",
+    "lint": "biome check packages apps package.json tsconfig.base.json vitest.config.ts",
+    "lint:fix": "biome check --write packages apps package.json tsconfig.base.json vitest.config.ts",
     "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/availability && tsc --noEmit -p apps/worker",
     "test": "vitest run",
     "test:watch": "vitest"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",

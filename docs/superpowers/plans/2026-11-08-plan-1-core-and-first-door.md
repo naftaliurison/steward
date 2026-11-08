@@ -16,7 +16,7 @@
 - Principles from the spec apply to every task: parse then review; act only on a yes; receipts and Undo (five minutes); honest states (`pending`, `done`, `failed`, `skipped`, `undone` are distinct and worded plainly); one save path.
 - Tokens are never stored in clear: AES-GCM under the `TOKEN_KEY` secret.
 - Nothing from any employer — no company names, org vocabulary or people — in code, comments, fixtures or docs. Sample names in tests are fictional (Dana, Omer, Noa).
-- Commits: conventional prefixes (`feat:`, `test:`, `chore:`, `docs:`), one commit per task, each ending with the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Commits: conventional prefixes (`feat:`, `test:`, `chore:`, `docs:`), one commit per task, each ending with a `Co-Authored-By: Claude <model> <noreply@anthropic.com>` trailer naming the Claude model that made the commit (the commit commands in this plan show the trailer's shape; substitute your own model name).
 - Licence header is not required per file; `LICENSE` (BSL 1.1) covers the repo.
 - Run everything from the repo root `C:\Users\nafta\steward` unless a step says otherwise.
 
