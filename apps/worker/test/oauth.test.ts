@@ -77,4 +77,24 @@ describe("Slack install", () => {
     expect(res.status).toBe(502);
     expect(await res.text()).toContain("invalid_code");
   });
+
+  it("tells the person plainly when they cancelled the install", async () => {
+    const deps = testDeps();
+    const res = await createApp(deps).request("/oauth/slack/callback?error=access_denied");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Install cancelled");
+  });
+
+  it("reports a Slack outage during the exchange as a plain 502, not a crash", async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new Error("socket hang up");
+    }) as unknown as typeof fetch;
+    const deps = testDeps({ fetchFn });
+    const state = await signState(SIGNING_SECRET, Math.floor(NOW / 1000));
+    const res = await createApp(deps).request(`/oauth/slack/callback?code=c&state=${state}`);
+    expect(res.status).toBe(502);
+    expect(await res.text()).toBe(
+      "Slack didn't answer the install request. Try again in a minute.",
+    );
+  });
 });

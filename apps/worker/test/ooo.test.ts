@@ -1,11 +1,12 @@
 import { STATUS_MODAL_CALLBACK, UNDO_ACTION, zonedTimeToEpochMs } from "@steward/availability";
 import { type Block, schema } from "@steward/core";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
+import { SAVE_FAILED, UNDO_FAILED } from "../src/routes/slack";
 import { flush, NOW, seedWorkspace, slackPost, type TestDeps, TZ, testDeps } from "./helpers";
 
-const RESPONSE_URL = "https://hooks.slack.test/r1";
+const RESPONSE_URL = "https://hooks.slack.com/commands/T1/1/r1";
 
 function submission(v: { type: string; from: string; to: string; text?: string; emoji?: string }) {
   return {
@@ -203,7 +204,7 @@ describe("/ooo", () => {
     });
     await flush(deps);
     expect(deps.slack.responses).toHaveLength(1);
-    expect(deps.slack.responses[0]?.text).toMatch(/^Your status didn't save — /);
+    expect(deps.slack.responses[0]?.text).toBe(SAVE_FAILED);
     expect(deps.slack.statuses.size).toBe(0);
   });
 
@@ -238,7 +239,51 @@ describe("/ooo", () => {
       }),
     });
     await flush(deps);
-    expect(deps.slack.responses.at(-1)?.text).toMatch(/^Undo didn't go through — /);
+    expect(deps.slack.responses.at(-1)?.text).toBe(UNDO_FAILED);
     expect(deps.slack.statuses.get("xoxp-dana")).toEqual(saved);
+  });
+
+  it("ignores a malformed interaction payload with a 200 and no work", async () => {
+    await seedWorkspace(deps);
+    const res = await slackPost(app, "/slack/interactions", { payload: "not json" });
+    expect(res.status).toBe(200);
+    expect(deps.deferred).toHaveLength(0);
+    const noUser = await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({ type: "x" }),
+    });
+    expect(noUser.status).toBe(200);
+  });
+
+  it("answers /ooo plainly when the workspace's bot token can't be read", async () => {
+    await seedWorkspace(deps);
+    await deps.db
+      .update(schema.workspaces)
+      .set({ botTokenSealed: "not-a-sealed-token" })
+      .where(eq(schema.workspaces.id, "T1"));
+    const res = await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      text: "",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "t",
+      response_url: RESPONSE_URL,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("can't reach Slack for this workspace");
+    expect(deps.slack.openedViews).toHaveLength(0);
+  });
+
+  it("answers with an inline error when the person lookup fails", async () => {
+    await seedWorkspace(deps);
+    await deps.db.run(sql`DROP TABLE people`);
+    const res = await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-12", to: "2026-11-12" })),
+    });
+    expect(await res.json()).toEqual({
+      response_action: "errors",
+      errors: { type: "Steward couldn't reach its records. Please try again in a moment." },
+    });
+    expect(deps.deferred).toHaveLength(0);
   });
 });

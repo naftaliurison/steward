@@ -41,4 +41,12 @@ describe("FakeSlackClient", () => {
     expect(await slack.getUserInfo({ botToken: "b", userId: "U2" })).toBeNull();
     expect(slack.userInfoCalls).toEqual(["U1", "U2"]);
   });
+
+  it("checks response_url the way the real client does", async () => {
+    const slack = new FakeSlackClient();
+    await expect(
+      slack.respond({ responseUrl: "https://evil.example/x", text: "hi" }),
+    ).rejects.toEqual(new SlackApiError("response_url", "untrusted_url"));
+    expect(slack.responses).toHaveLength(0);
+  });
 });

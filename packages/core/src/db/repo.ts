@@ -49,8 +49,8 @@ export async function ensurePerson(
     userTokenSealed: null,
     profileSyncedAt: null,
   };
-  await db.insert(people).values(row);
-  return row;
+  await db.insert(people).values(row).onConflictDoNothing();
+  return (await getPerson(db, id)) ?? row;
 }
 
 export async function setPersonUserToken(db: Db, id: string, sealed: string): Promise<PersonRow> {

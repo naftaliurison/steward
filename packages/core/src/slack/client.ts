@@ -52,6 +52,19 @@ export class SlackApiError extends Error {
   }
 }
 
+/** Slack's response_url values live on hooks.slack.com; anything else is not Slack and gets nothing. */
+export function assertTrustedResponseUrl(responseUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(responseUrl);
+  } catch {
+    throw new SlackApiError("response_url", "untrusted_url");
+  }
+  if (url.protocol !== "https:" || url.hostname !== "hooks.slack.com") {
+    throw new SlackApiError("response_url", "untrusted_url");
+  }
+}
+
 type ApiResponse = { ok: boolean; error?: string } & Record<string, unknown>;
 
 /** Slack answers JSON; an edge or outage page is not Slack and becomes a typed error. */
@@ -97,6 +110,7 @@ export class RealSlackClient implements SlackClient {
   }
 
   async respond(args: RespondArgs): Promise<void> {
+    assertTrustedResponseUrl(args.responseUrl);
     const res = await this.fetchFn(args.responseUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },

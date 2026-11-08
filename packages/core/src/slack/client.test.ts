@@ -106,4 +106,19 @@ describe("RealSlackClient", () => {
       new SlackApiError("users.profile.set", "http_502"),
     );
   });
+
+  it("refuses to post a receipt anywhere but hooks.slack.com", async () => {
+    const fetchFn = fetchReturning({}, 200);
+    const slack = new RealSlackClient(fetchFn);
+    await expect(
+      slack.respond({ responseUrl: "https://evil.example/x", text: "hi" }),
+    ).rejects.toEqual(new SlackApiError("response_url", "untrusted_url"));
+    await expect(
+      slack.respond({ responseUrl: "http://hooks.slack.com/x", text: "hi" }),
+    ).rejects.toEqual(new SlackApiError("response_url", "untrusted_url"));
+    await expect(slack.respond({ responseUrl: "not a url", text: "hi" })).rejects.toEqual(
+      new SlackApiError("response_url", "untrusted_url"),
+    );
+    expect(fetchFn.mock.calls).toHaveLength(0);
+  });
 });

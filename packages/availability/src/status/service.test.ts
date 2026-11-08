@@ -220,4 +220,24 @@ describe("saveStatus / undoStatus", () => {
       error: "The five-minute undo window has passed.",
     });
   });
+
+  it("a status from another workspace is not yours", async () => {
+    const saved = await saveStatus(
+      deps,
+      dana,
+      { type: "out", from: "2026-11-12", to: "2026-11-12", text: "Out", emoji: ":x:" },
+      "xoxp-dana",
+    );
+    await upsertWorkspace(db, {
+      id: "T2",
+      name: "Other",
+      botTokenSealed: "x",
+      botUserId: "UB2",
+      installedAt: 0,
+    });
+    const stranger = await ensurePerson(db, "T2", "U_DANA", "Dana");
+    expect(await undoStatus(deps, saved.status.id, stranger, "xoxp-other")).toEqual({
+      error: "That status isn't yours or no longer exists.",
+    });
+  });
 });

@@ -1,5 +1,6 @@
 import type { ModalView } from "./blocks";
 import {
+  assertTrustedResponseUrl,
   type RespondArgs,
   type SetStatusArgs,
   SlackApiError,
@@ -39,6 +40,7 @@ export class FakeSlackClient implements SlackClient {
   }
 
   async respond(args: RespondArgs): Promise<void> {
+    assertTrustedResponseUrl(args.responseUrl);
     this.maybeFail("respond");
     this.responses.push(args);
   }

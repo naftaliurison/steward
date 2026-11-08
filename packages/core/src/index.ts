@@ -18,7 +18,7 @@ export { createTargets, executeTargets, targetsForStatus, undoTargets } from "./
 export { newId } from "./ids";
 export * from "./slack/blocks";
 export type { RespondArgs, SetStatusArgs, SlackClient, UserProfile } from "./slack/client";
-export { RealSlackClient, SlackApiError } from "./slack/client";
+export { assertTrustedResponseUrl, RealSlackClient, SlackApiError } from "./slack/client";
 export type { FakeStatus } from "./slack/fake";
 export { FakeSlackClient } from "./slack/fake";
 export { slackSignature, timingSafeEqual, verifySlackSignature } from "./slack/verify";
