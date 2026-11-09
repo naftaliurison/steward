@@ -1,32 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/d1";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Connector, ConnectorRegistry, type WriteSpec } from "../engine/connector";
 import { createTargets, executeTargets, undoTargets } from "../engine/engine";
+import { applyD1Migrations } from "../testing";
 import type { Db } from "./client";
 import { ensurePerson, getPerson, upsertWorkspace } from "./repo";
 import * as schema from "./schema";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const migrationsDir = path.join(here, "../../drizzle");
-
-/** Applies the committed migrations statement by statement, the way `wrangler d1 migrations apply` does. */
-async function applyMigrations(d1: D1Database): Promise<void> {
-  const files = fs
-    .readdirSync(migrationsDir)
-    .filter((f) => f.endsWith(".sql"))
-    .sort();
-  for (const file of files) {
-    const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
-    for (const raw of sql.split("--> statement-breakpoint")) {
-      const statement = raw.replace(/\s+/g, " ").trim();
-      if (statement) await d1.prepare(statement).run();
-    }
-  }
-}
 
 describe("D1 driver smoke (Miniflare)", () => {
   let mf: Miniflare;
@@ -39,7 +19,7 @@ describe("D1 driver smoke (Miniflare)", () => {
       d1Databases: { DB: "steward-smoke" },
     });
     const d1 = (await mf.getD1Database("DB")) as unknown as D1Database;
-    await applyMigrations(d1);
+    await applyD1Migrations(d1);
     db = drizzle(d1, { schema }) as unknown as Db;
   }, 90_000);
 

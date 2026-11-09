@@ -9,7 +9,7 @@ import {
   updatePersonProfile,
   upsertWorkspace,
 } from "@steward/core";
-import { and, count, eq, gt, inArray, like, lt, lte, notInArray, sql } from "drizzle-orm";
+import { and, count, eq, gt, inArray, lt, lte, notInArray, type SQL, sql } from "drizzle-orm";
 import type { Deps } from "../deps";
 import { isKnownTimeZone } from "../people";
 import { DEMO_USER_TOKEN_PREFIX, DemoSlackClient } from "./slackClient";
@@ -27,6 +27,8 @@ export const DEMO_MAX_EVENTS = 40;
 export const DEMO_MAX_ADVANCE_MS = 24 * 60 * 60 * 1000;
 /** A session-less demo workspace younger than this may still be mid-create; the sweep leaves it be. */
 export const DEMO_ORPHAN_GRACE_MS = 5 * 60 * 1000;
+/** Budget rows (`demo_days`) older than this are deleted by cleanup. */
+const DEMO_DAY_ROWS_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The sample team. The first one is "you"; their zone follows the visitor's browser. */
 export const DEMO_PEOPLE = [
@@ -215,49 +217,76 @@ export async function deleteDemoWorkspace(db: Db, sessionId: string): Promise<vo
 }
 
 /**
- * Deletes every expired session and all rows its workspace owns, and sweeps demo workspaces whose
- * session row is gone and that are older than the grace (a seed that died half way). Returns how many expired sessions went.
+ * Deletes everything owned by the workspaces a subquery names: five statements, however many
+ * workspaces there are. `workspaceIds` is a parenthesised select of workspace ids.
+ */
+async function deleteOwnedBy(db: Db, workspaceIds: SQL): Promise<void> {
+  await db
+    .delete(schema.statusTargets)
+    .where(
+      inArray(
+        schema.statusTargets.statusId,
+        db
+          .select({ id: schema.statuses.id })
+          .from(schema.statuses)
+          .where(inArray(schema.statuses.workspaceId, workspaceIds)),
+      ),
+    );
+  await db.delete(schema.statuses).where(inArray(schema.statuses.workspaceId, workspaceIds));
+  await db.delete(schema.audit).where(inArray(schema.audit.workspaceId, workspaceIds));
+  await db.delete(schema.people).where(inArray(schema.people.workspaceId, workspaceIds));
+  await db.delete(schema.workspaces).where(inArray(schema.workspaces.id, workspaceIds));
+}
+
+/**
+ * Deletes every expired session with all the rows its workspace owns, then sweeps what was left
+ * behind: demo workspaces without a session row that are older than the grace (a seed that died
+ * half way), events whose session is gone, and old budget rows. A fixed number of statements
+ * (at most 15) however much there is to delete, because D1 limits the queries of one invocation.
+ * Returns how many expired sessions went.
  */
 export async function cleanupDemoSessions(deps: Pick<Deps, "db" | "now">): Promise<number> {
-  const expired = await deps.db
-    .select()
-    .from(schema.demoSessions)
-    .where(lte(schema.demoSessions.expiresAt, deps.now()));
-  let removed = 0;
-  for (const s of expired) {
-    try {
-      await deleteDemoWorkspace(deps.db, s.id);
-      removed++;
-    } catch (err) {
-      console.error("demo cleanup failed", { session: s.id, err });
-    }
-  }
-  try {
-    const orphans = await deps.db
-      .select({ id: schema.workspaces.id })
-      .from(schema.workspaces)
+  const now = deps.now();
+  const sessions = schema.demoSessions;
+  const workspaces = schema.workspaces;
+  const expired = lte(sessions.expiresAt, now);
+
+  const [row] = await deps.db.select({ n: count() }).from(sessions).where(expired);
+  const removed = row?.n ?? 0;
+  if (removed > 0) {
+    await deleteOwnedBy(
+      deps.db,
+      sql`(select 'demo:' || ${sessions.id} from ${sessions} where ${sessions.expiresAt} <= ${now})`,
+    );
+    await deps.db
+      .delete(schema.demoEvents)
       .where(
-        and(
-          like(schema.workspaces.id, "demo:%"),
-          lte(schema.workspaces.installedAt, deps.now() - DEMO_ORPHAN_GRACE_MS),
-          notInArray(
-            schema.workspaces.id,
-            deps.db
-              .select({ id: sql<string>`'demo:' || ${schema.demoSessions.id}` })
-              .from(schema.demoSessions),
-          ),
+        inArray(
+          schema.demoEvents.sessionId,
+          sql`(select ${sessions.id} from ${sessions} where ${sessions.expiresAt} <= ${now})`,
         ),
       );
-    for (const w of orphans) {
-      const sessionId = w.id.slice("demo:".length);
-      try {
-        await deleteDemoWorkspace(deps.db, sessionId);
-      } catch (err) {
-        console.error("demo orphan sweep failed", { session: sessionId, err });
-      }
-    }
+    await deps.db.delete(sessions).where(expired);
+  }
+
+  try {
+    await deleteOwnedBy(
+      deps.db,
+      sql`(select ${workspaces.id} from ${workspaces} where ${workspaces.id} like 'demo:%' and ${workspaces.installedAt} <= ${now - DEMO_ORPHAN_GRACE_MS} and ${workspaces.id} not in (select 'demo:' || ${sessions.id} from ${sessions}))`,
+    );
+    // Events are only ever written for a session that exists, so an event without one is safe to delete.
+    await deps.db
+      .delete(schema.demoEvents)
+      .where(
+        notInArray(schema.demoEvents.sessionId, sql`(select ${sessions.id} from ${sessions})`),
+      );
+    await deps.db
+      .delete(schema.demoDays)
+      .where(
+        lt(schema.demoDays.day, new Date(now - DEMO_DAY_ROWS_KEPT_MS).toISOString().slice(0, 10)),
+      );
   } catch (err) {
-    console.error("demo orphan sweep query failed", { err });
+    console.error("demo sweep failed", { err });
   }
   return removed;
 }

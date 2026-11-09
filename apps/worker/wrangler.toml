@@ -23,3 +23,7 @@ crons = ["* * * * *"]
 name = "DEMO_LIMITER"
 namespace_id = "1001"
 simple = { limit = 60, period = 60 }
+
+# Workers Logs: the tick's one line a minute and every console.error are kept and searchable.
+[observability]
+enabled = true
