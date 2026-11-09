@@ -83,7 +83,9 @@ async function parseJson(res: Response, method: string): Promise<ApiResponse> {
 }
 
 export class RealSlackClient implements SlackClient {
-  constructor(private readonly fetchFn: typeof fetch = fetch) {}
+  // The default is a wrapper, not `fetch` itself: Workers rejects the platform fetch when it is
+  // called as a method of another object, which `this.fetchFn(...)` would be.
+  constructor(private readonly fetchFn: typeof fetch = (input, init) => fetch(input, init)) {}
 
   private async call(
     method: string,

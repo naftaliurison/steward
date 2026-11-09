@@ -17,11 +17,18 @@ export type Deps = {
   defer: (work: Promise<unknown>) => void;
 };
 
+/**
+ * The platform's fetch, safe to hand around. Workers throws "Illegal invocation" when `fetch` is
+ * called as a method of another object, which `deps.fetchFn(...)` and `this.fetchFn(...)` are.
+ * Node does not mind, so tests alone would not catch a bare `fetch` here.
+ */
+const platformFetch: typeof fetch = (input, init) => fetch(input, init);
+
 export function depsFromEnv(env: Env, ctx: ExecutionContext): Deps {
   return {
     db: createD1Db(env.DB),
-    slack: new RealSlackClient(fetch),
-    fetchFn: fetch,
+    slack: new RealSlackClient(platformFetch),
+    fetchFn: platformFetch,
     now: () => Date.now(),
     signingSecret: env.SLACK_SIGNING_SECRET,
     tokenKey: env.TOKEN_KEY,
