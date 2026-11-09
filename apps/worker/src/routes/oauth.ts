@@ -82,7 +82,7 @@ export function oauthRoutes(deps: Deps) {
     const code = c.req.query("code") ?? "";
     const state = c.req.query("state") ?? "";
     if (!code || !(await verifyState(deps.signingSecret, state, Math.floor(deps.now() / 1000)))) {
-      return c.text("This install link has expired. Start again from the product page.", 400);
+      return c.text("This install link has expired. Open the install link again.", 400);
     }
     let data: AccessResponse;
     try {

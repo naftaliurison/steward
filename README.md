@@ -4,7 +4,7 @@ An AI colleague for Slack that acts in your work tools only on your yes, and sho
 
 Steward is one core — the Slack surface, connections to other tools, an act-with-receipt engine with Undo, scheduling, budgets, audit and evaluation — and products built on it.
 
-**Steward Availability** is the first: say once, in plain words, that you're out, travelling or working remotely, and it sets your Slack status, your Google calendars and your Gmail auto-reply — reviewable before it saves, reversible for five minutes after. It also finds a time for a group and books it with an agenda.
+**Steward Availability** is the first, and it is being built: you will say once, in plain words, that you're out, travelling or working remotely, and it will set your Slack status, your Google calendars and your Gmail auto-reply — reviewable before it saves, reversible for five minutes after — and find a time for a group and book it with an agenda. Only the Slack status works today.
 
 Status: `/ooo` form → Slack status → receipt → Undo works end to end in Slack, and the same flow runs as a browser demo at `/try` against a pretend Slack. See Deploy below to run your own copy. The design is in [`docs/superpowers/specs/2026-11-08-steward-availability-design.md`](docs/superpowers/specs/2026-11-08-steward-availability-design.md); plans live in `docs/superpowers/plans/`.
 

@@ -89,6 +89,8 @@ export function useDemoSession(opts: { api: DemoApi; store: Store; tz: string })
     errors: NO_ERRORS,
   });
   const [working, setWorking] = useState(false);
+  /** Whether a request is in flight, readable in the same tick (the `working` state is not). */
+  const inFlight = useRef(false);
   const started = useRef(false);
   const lastSeq = useRef(0);
   const noticeId = useRef(0);
@@ -117,6 +119,7 @@ export function useDemoSession(opts: { api: DemoApi; store: Store; tz: string })
     async (note?: string) => {
       generation.current += 1;
       const gen = generation.current;
+      inFlight.current = false;
       setWorking(false);
       setPhase("loading");
       let fresh: DemoSessionInfo;
@@ -151,6 +154,7 @@ export function useDemoSession(opts: { api: DemoApi; store: Store; tz: string })
     if (!saved) return begin();
     generation.current += 1;
     const gen = generation.current;
+    inFlight.current = false;
     setWorking(false);
     setPhase("loading");
     try {
@@ -187,9 +191,10 @@ export function useDemoSession(opts: { api: DemoApi; store: Store; tz: string })
       work: (id: string, live: () => boolean) => Promise<DemoState | undefined>,
       onFailure?: (message: string) => void,
     ) => {
-      if (!info || working) return;
+      if (!info || inFlight.current) return;
       const gen = generation.current;
       const live = () => gen === generation.current;
+      inFlight.current = true;
       setWorking(true);
       try {
         const next = (await work(info.id, live)) ?? (await api.getState(info.id));
@@ -206,10 +211,13 @@ export function useDemoSession(opts: { api: DemoApi; store: Store; tz: string })
           else notify(message);
         }
       } finally {
-        if (live()) setWorking(false);
+        if (live()) {
+          inFlight.current = false;
+          setWorking(false);
+        }
       }
     },
-    [api, store, info, working, begin, show, notify],
+    [api, store, info, begin, show, notify],
   );
 
   const closeView = useCallback((seq: number) => {

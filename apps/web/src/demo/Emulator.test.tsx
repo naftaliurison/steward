@@ -263,11 +263,17 @@ describe("Emulator", () => {
     const api = fakeApi();
     api.createSession = vi
       .fn<DemoApi["createSession"]>()
-      .mockRejectedValueOnce(new DemoBusy("busy"))
+      .mockRejectedValueOnce(
+        new DemoBusy(
+          "The demo has had all its visitors for today. It opens again at midnight UTC.",
+        ),
+      )
       .mockResolvedValue(info);
     render(<Emulator api={api} store={memoryStore()} tz="Europe/London" />);
     expect(
-      await screen.findByText("The demo is busy right now. Try again in a few minutes."),
+      await screen.findByText(
+        "The demo has had all its visitors for today. It opens again at midnight UTC.",
+      ),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("textbox", { name: "Message Steward" })).toBeTruthy();
@@ -465,6 +471,23 @@ describe("useDemoSession", () => {
     await waitFor(() => expect(view.result.current.phase).toBe("ready"));
     return view;
   };
+
+  it("sends one request when two actions are made in the same tick", async () => {
+    const api = fakeApi();
+    const slow = deferred<{ text: string }>();
+    api.sendCommand = vi.fn<DemoApi["sendCommand"]>(() => slow.promise);
+    const { result } = await hook(api);
+    let both: Promise<unknown> | undefined;
+    act(() => {
+      both = Promise.all([result.current.command("/ooo"), result.current.command("/ooo")]);
+    });
+    expect(api.sendCommand).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      slow.resolve({ text: "" });
+      await both;
+    });
+    expect(result.current.working).toBe(false);
+  });
 
   it("drops the late answer of a request that began in an earlier session", async () => {
     const api = fakeApi();
