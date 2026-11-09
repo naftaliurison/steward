@@ -16,7 +16,11 @@ pnpm test                                   # unit + flow tests (Node, in-memory
 pnpm --filter @steward/worker db:migrate:local
 cp apps/worker/.dev.vars.example apps/worker/.dev.vars   # then fill in the values
 pnpm --filter @steward/worker dev           # http://localhost:8787/health
+pnpm --filter @steward/web dev              # http://localhost:5173 (pages; proxies the API to :8787)
+pnpm build                                  # web to apps/web/dist, then a dry-run Worker build that includes it
 ```
+
+The Worker serves the built pages itself, so `pnpm --filter @steward/worker dev` needs `pnpm --filter @steward/web build` to have run once.
 
 ## Deploy (first time)
 
