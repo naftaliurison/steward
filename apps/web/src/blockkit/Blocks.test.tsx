@@ -67,4 +67,81 @@ describe("Blocks", () => {
     expect(screen.getByText("unsupported block: image")).toBeTruthy();
     expect(screen.getByText("unsupported element: overflow")).toBeTruthy();
   });
+
+  it("turns only http and https URLs into links", () => {
+    const blocks: Block[] = [
+      actions(
+        button("Good", "a", { url: "https://example.com/docs" }),
+        button("Script", "b", { url: "javascript:alert(1)" }),
+        button("Data", "c", { url: "data:text/html,x" }),
+        button("Junk", "d", { url: "not a url" }),
+      ),
+    ];
+    const { container } = render(<Blocks blocks={blocks} />);
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Good" }).getAttribute("href")).toBe(
+      "https://example.com/docs",
+    );
+    expect(screen.getAllByText("unsupported element: button (link not allowed)")).toHaveLength(3);
+  });
+
+  describe("malformed blocks", () => {
+    const show = (bad: unknown) =>
+      render(<Blocks blocks={[bad, section("Still here")] as unknown as Block[]} />);
+
+    it("shows a null block and a block without a type", () => {
+      show(null);
+      show({ text: "x" });
+      expect(screen.getAllByText("unsupported block: (no type)")).toHaveLength(2);
+      expect(screen.getAllByText("Still here")).toHaveLength(2);
+    });
+
+    it.each([
+      ["actions without elements", { type: "actions" }],
+      ["context without elements", { type: "context" }],
+    ])("renders %s as empty", (_name, bad) => {
+      show(bad);
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(screen.getByText("Still here")).toBeTruthy();
+    });
+
+    it("shows a header without text", () => {
+      show({ type: "header" });
+      expect(screen.getByText("unsupported block: header (no text)")).toBeTruthy();
+      expect(screen.getByText("Still here")).toBeTruthy();
+    });
+
+    it("shows a button without text and a null element", () => {
+      show({ type: "actions", elements: [{ type: "button", action_id: "x" }, null] });
+      expect(screen.getByText("unsupported element: button (no text)")).toBeTruthy();
+      expect(screen.getByText("unsupported element: (no type)")).toBeTruthy();
+      expect(screen.getByText("Still here")).toBeTruthy();
+    });
+
+    it("shows a context element that is not text", () => {
+      show({ type: "context", elements: [{ type: "image" }, { type: "mrkdwn", text: "ok" }] });
+      expect(screen.getByText("unsupported element: image")).toBeTruthy();
+      expect(screen.getByText("ok")).toBeTruthy();
+      expect(screen.getByText("Still here")).toBeTruthy();
+    });
+
+    it("shows an empty section", () => {
+      show({ type: "section" });
+      expect(screen.getByText("unsupported block: section (empty)")).toBeTruthy();
+      expect(screen.getByText("Still here")).toBeTruthy();
+    });
+
+    it("catches anything else in a per-block boundary", () => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      show({
+        type: "section",
+        get text(): never {
+          throw new Error("boom");
+        },
+      });
+      quiet.mockRestore();
+      expect(screen.getByText("unsupported block: section")).toBeTruthy();
+      expect(screen.getByText("Still here")).toBeTruthy();
+    });
+  });
 });

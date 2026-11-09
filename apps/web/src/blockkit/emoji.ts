@@ -7,5 +7,7 @@ const EMOJI: Record<string, string> = {
 };
 
 export function emojify(text: string): string {
-  return text.replace(/:([a-z0-9_+'-]+):/g, (whole, name: string) => EMOJI[name] ?? whole);
+  return text.replace(/:([a-z0-9_+'-]+):/g, (whole, name: string) =>
+    Object.hasOwn(EMOJI, name) ? (EMOJI[name] ?? whole) : whole,
+  );
 }
