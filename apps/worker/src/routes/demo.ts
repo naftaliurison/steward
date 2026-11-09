@@ -1,6 +1,7 @@
 import { getPerson, schema } from "@steward/core";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import {
   advanceDemoClock,
   createDemoSession,
@@ -27,6 +28,20 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<u
 
 const responseUrlFor = (session: Pick<DemoSession, "id">) =>
   `https://hooks.slack.com/demo/${session.id}`;
+
+/** True when the body has the parts the handler reads for its type; other types pass through. */
+function isInteractionShaped(body: Record<string, unknown>): boolean {
+  if (typeof body.type !== "string") return false;
+  if (body.type === "view_submission") {
+    const view = body.view;
+    if (!isObject(view) || typeof view.callback_id !== "string") return false;
+    return isObject(view.state) && isObject(view.state.values);
+  }
+  if (body.type === "block_actions") {
+    return Array.isArray(body.actions) && body.actions.length > 0 && isObject(body.actions[0]);
+  }
+  return true;
+}
 
 /**
  * What the visitor's interaction becomes before it reaches the handlers.
@@ -68,6 +83,15 @@ async function stateOf(deps: Deps, session: DemoSession) {
 
 export function demoRoutes(deps: Deps) {
   const r = new Hono<Vars>();
+
+  // A visitor can post anything; none of it may be large.
+  r.use(
+    "*",
+    bodyLimit({
+      maxSize: 32 * 1024,
+      onError: (c) => c.json({ error: "That request is too large." }, 413),
+    }),
+  );
 
   r.post("/sessions", async (c) => {
     const body = await readJson(c);
@@ -131,7 +155,7 @@ export function demoRoutes(deps: Deps) {
   r.post("/:id/interact", async (c) => {
     const session = c.get("session");
     const body = await readJson(c);
-    if (!isObject(body) || typeof body.type !== "string") {
+    if (!isObject(body) || !isInteractionShaped(body)) {
       return c.json({ error: "Send a Slack-shaped interaction payload." }, 400);
     }
     const you = await getPerson(deps.db, session.youPersonId);

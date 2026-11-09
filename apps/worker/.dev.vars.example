@@ -4,3 +4,4 @@ SLACK_CLIENT_ID=from the Slack app's Basic Information page
 SLACK_CLIENT_SECRET=from the Slack app's Basic Information page
 TOKEN_KEY=run: node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 APP_URL=http://localhost:8787
+DEMO_ENABLED=1

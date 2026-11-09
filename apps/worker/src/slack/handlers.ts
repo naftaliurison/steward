@@ -20,6 +20,9 @@ export const LOOKUP_FAILED = "Steward couldn't reach its records. Please try aga
 const BOT_TOKEN_UNREADABLE =
   "Steward can't reach Slack for this workspace right now. Ask whoever installed it to reinstall Steward.";
 
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
 /** What the HTTP route must answer Slack with. */
 export type InteractionAnswer = { kind: "json"; body: unknown } | { kind: "text"; body: string };
 
@@ -96,6 +99,8 @@ export async function handleInteraction(
 
   if (payload.type === "view_submission") {
     const { view } = payload as ViewSubmissionPayload;
+    const values: unknown = (view as { state?: { values?: unknown } } | undefined)?.state?.values;
+    if (!isObject(view) || !isObject(values)) return { kind: "text", body: "" };
     if (view.callback_id !== STATUS_MODAL_CALLBACK) return { kind: "text", body: "" };
     // "Today" is the person's, not UTC's, so the person is resolved before validation. The user token is not.
     let person: PersonRow;
@@ -147,6 +152,7 @@ export async function handleInteraction(
 
   if (payload.type === "block_actions") {
     const { actions, response_url } = payload as BlockActionsPayload;
+    if (!Array.isArray(actions)) return { kind: "text", body: "" };
     const action = actions[0];
     if (action?.action_id === UNDO_ACTION && action.value && response_url) {
       const statusId = action.value;

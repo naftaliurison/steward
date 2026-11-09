@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /** One row per installed Slack workspace (a tenant). `id` is Slack's team id. */
 export const workspaces = sqliteTable("workspaces", {
@@ -44,7 +44,10 @@ export const statuses = sqliteTable(
     undoUntilMs: integer("undo_until_ms"),
     replacedStatusId: text("replaced_status_id"),
   },
-  (t) => [index("statuses_person_state_idx").on(t.personId, t.state)],
+  (t) => [
+    index("statuses_person_state_idx").on(t.personId, t.state),
+    index("statuses_workspace_idx").on(t.workspaceId),
+  ],
 );
 
 /** One row per (status, system write). The receipt card is rendered from these rows. */
@@ -67,16 +70,20 @@ export const statusTargets = sqliteTable(
   (t) => [index("status_targets_status_idx").on(t.statusId)],
 );
 
-export const audit = sqliteTable("audit", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
-  personId: text("person_id").notNull(),
-  action: text("action").notNull(),
-  result: text("result").notNull(),
-  detail: text("detail"),
-  at: integer("at").notNull(),
-  idempotencyKey: text("idempotency_key"),
-});
+export const audit = sqliteTable(
+  "audit",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    personId: text("person_id").notNull(),
+    action: text("action").notNull(),
+    result: text("result").notNull(),
+    detail: text("detail"),
+    at: integer("at").notNull(),
+    idempotencyKey: text("idempotency_key"),
+  },
+  (t) => [index("audit_workspace_idx").on(t.workspaceId)],
+);
 
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 export type PersonRow = typeof people.$inferSelect;
@@ -104,7 +111,7 @@ export const demoEvents = sqliteTable(
     payload: text("payload").notNull(),
     at: integer("at").notNull(),
   },
-  (t) => [index("demo_events_session_seq_idx").on(t.sessionId, t.seq)],
+  (t) => [uniqueIndex("demo_events_session_seq_idx").on(t.sessionId, t.seq)],
 );
 
 export type DemoSessionRow = typeof demoSessions.$inferSelect;

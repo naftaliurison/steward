@@ -1,4 +1,4 @@
-import { header, SlackApiError } from "@steward/core";
+import { header, newId, SlackApiError, schema } from "@steward/core";
 import { createTestDb } from "@steward/core/testing";
 import { describe, expect, it } from "vitest";
 import { DemoSlackClient, readDemoEvents } from "../src/demo/slackClient";
@@ -72,5 +72,22 @@ describe("DemoSlackClient", () => {
     ).rejects.toEqual(new SlackApiError("response_url", "untrusted_url"));
     expect(await readDemoEvents(db, "S1")).toHaveLength(0);
     expect(await slack.getUserInfo({ botToken: "b", userId: "U" })).toBeNull();
+  });
+
+  it("numbers events 1, 2, 3 per session, and the database refuses a repeated number", async () => {
+    const db = createTestDb();
+    const a = new DemoSlackClient(db, "A", () => 1);
+    const b = new DemoSlackClient(db, "B", () => 1);
+    await a.clearUserStatus({ userToken: "t" });
+    await b.clearUserStatus({ userToken: "t" });
+    await a.clearUserStatus({ userToken: "t" });
+    await a.clearUserStatus({ userToken: "t" });
+    expect((await readDemoEvents(db, "A")).map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect((await readDemoEvents(db, "B")).map((e) => e.seq)).toEqual([1]);
+    await expect(
+      db
+        .insert(schema.demoEvents)
+        .values({ id: newId(), sessionId: "A", seq: 2, kind: "status", payload: "{}", at: 1 }),
+    ).rejects.toThrow();
   });
 });

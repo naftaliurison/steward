@@ -10,7 +10,7 @@ import {
   schema,
   type UserProfile,
 } from "@steward/core";
-import { eq, max } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 export type DemoEventKind = "view" | "response" | "status";
 
@@ -25,20 +25,28 @@ export class DemoSlackClient implements SlackClient {
     private readonly now: () => number,
   ) {}
 
+  /**
+   * One statement: the next number is worked out inside the INSERT itself, so two requests
+   * recording at once cannot read the same maximum (the unique index backs this up).
+   */
   private async record(kind: DemoEventKind, payload: unknown): Promise<void> {
-    const [row] = await this.db
-      .select({ seq: max(schema.demoEvents.seq) })
-      .from(schema.demoEvents)
-      .where(eq(schema.demoEvents.sessionId, this.sessionId));
-    const seq = (row?.seq ?? 0) + 1;
-    await this.db.insert(schema.demoEvents).values({
-      id: newId(),
-      sessionId: this.sessionId,
-      seq,
-      kind,
-      payload: JSON.stringify(payload),
-      at: this.now(),
-    });
+    const sessionId = this.sessionId;
+    const body = JSON.stringify(payload);
+    const at = this.now();
+    const id = newId();
+    await this.db.insert(schema.demoEvents).select((qb) =>
+      qb
+        .select({
+          id: sql<string>`${id}`.as("id"),
+          sessionId: sql<string>`${sessionId}`.as("session_id"),
+          seq: sql<number>`coalesce(max(${schema.demoEvents.seq}), 0) + 1`.as("seq"),
+          kind: sql<string>`${kind}`.as("kind"),
+          payload: sql<string>`${body}`.as("payload"),
+          at: sql<number>`${at}`.as("at"),
+        })
+        .from(schema.demoEvents)
+        .where(eq(schema.demoEvents.sessionId, sessionId)),
+    );
   }
 
   async openView(args: {

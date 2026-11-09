@@ -53,10 +53,10 @@ describe("/demo", () => {
     const deps = testDeps();
     const app = createApp(deps);
 
-    const created = await post(app, "/demo/sessions", { tz: "Asia/Tokyo" });
+    const created = await post(app, "/demo/sessions", { tz: "Pacific/Honolulu" });
     expect(created.status).toBe(201);
     const s = (await created.json()) as Created;
-    expect(s.you).toMatchObject({ slackUserId: "U_DANA", tz: "Asia/Tokyo" });
+    expect(s.you).toMatchObject({ slackUserId: "U_DANA", tz: "Pacific/Honolulu" });
 
     const cmd = await post(app, `/demo/${s.id}/command`, { text: "/ooo" });
     expect(await cmd.json()).toEqual({ text: "" });
@@ -64,8 +64,9 @@ describe("/demo", () => {
     expect(state.events.map((e) => e.kind)).toEqual(["view"]);
     const view = state.events[0]?.payload.view as { callback_id: string; blocks: Blocks };
     expect(view.callback_id).toBe(STATUS_MODAL_CALLBACK);
-    const today = todayIn("Asia/Tokyo", NOW);
-    expect(view.blocks[1]?.element?.initial_date).toBe(today);
+    const today = todayIn("Pacific/Honolulu", NOW);
+    expect(today).toBe("2026-11-11");
+    expect(view.blocks[1]?.element?.initial_date).toBe("2026-11-11");
 
     const saved = await post(app, `/demo/${s.id}/interact`, submission(today, today));
     expect(await saved.json()).toEqual({ response_action: "clear" });
@@ -141,7 +142,48 @@ describe("/demo", () => {
     const s = (await (await post(app, "/demo/sessions", {})).json()) as Created;
     expect((await post(app, `/demo/${s.id}/command`, { text: "/other" })).status).toBe(400);
     expect((await post(app, `/demo/${s.id}/interact`, "not an object")).status).toBe(400);
+    for (const body of [
+      { type: "view_submission" },
+      { type: "view_submission", view: { callback_id: "ooo_status" } },
+      { type: "view_submission", view: { callback_id: "ooo_status", state: {} } },
+      { type: "block_actions" },
+    ]) {
+      const res = await post(app, `/demo/${s.id}/interact`, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Send a Slack-shaped interaction payload." });
+    }
     expect((await post(app, `/demo/${s.id}/advance`, { minutes: "soon" })).status).toBe(400);
+  });
+
+  it("refuses a request body over 32 KB and records nothing", async () => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    const big = { pad: "x".repeat(40 * 1024) };
+    const tooLarge = { error: "That request is too large." };
+    const sessionsBefore = await deps.db.select().from(schema.demoSessions);
+    const refused = await post(app, "/demo/sessions", big);
+    expect(refused.status).toBe(413);
+    expect(await refused.json()).toEqual(tooLarge);
+    expect(await deps.db.select().from(schema.demoSessions)).toHaveLength(sessionsBefore.length);
+
+    const s = (await (await post(app, "/demo/sessions", {})).json()) as Created;
+    const res = await post(app, `/demo/${s.id}/interact`, { type: "x", ...big });
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual(tooLarge);
+    expect((await getState(app, s.id)).events).toHaveLength(0);
+  });
+
+  it("is switched off unless enabled, and creates nothing while off", async () => {
+    const deps = testDeps({ demoEnabled: false });
+    const app = createApp(deps);
+    const off = { error: "The demo is switched off." };
+    const created = await post(app, "/demo/sessions", {});
+    expect(created.status).toBe(503);
+    expect(await created.json()).toEqual(off);
+    const state = await app.request("/demo/anything/state");
+    expect(state.status).toBe(503);
+    expect(await state.json()).toEqual(off);
+    expect(await deps.db.select().from(schema.workspaces)).toHaveLength(0);
   });
 
   it("will not undo another session's status", async () => {
