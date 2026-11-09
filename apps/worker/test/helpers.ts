@@ -40,6 +40,7 @@ export function testDeps(overrides: Partial<Omit<Deps, "slack" | "db" | "defer">
     slackClientId: "client-id",
     slackClientSecret: "client-secret",
     appUrl: "https://steward.example",
+    demoEnabled: true,
     defer: (work) => {
       deferred.push(work);
     },

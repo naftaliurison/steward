@@ -243,6 +243,19 @@ describe("/ooo", () => {
     expect(deps.slack.statuses.get("xoxp-dana")).toEqual(saved);
   });
 
+  it("answers 200, not 500, to a signed view_submission with no view", async () => {
+    await seedWorkspace(deps);
+    const res = await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({
+        type: "view_submission",
+        team: { id: "T1" },
+        user: { id: "U_DANA" },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(deps.deferred).toHaveLength(0);
+  });
+
   it("ignores a malformed interaction payload with a 200 and no work", async () => {
     await seedWorkspace(deps);
     const res = await slackPost(app, "/slack/interactions", { payload: "not json" });

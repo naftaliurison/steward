@@ -9,7 +9,14 @@ export {
   updatePersonProfile,
   upsertWorkspace,
 } from "./db/repo";
-export type { PersonRow, StatusRow, TargetRow, WorkspaceRow } from "./db/schema";
+export type {
+  DemoEventRow,
+  DemoSessionRow,
+  PersonRow,
+  StatusRow,
+  TargetRow,
+  WorkspaceRow,
+} from "./db/schema";
 export * as schema from "./db/schema";
 export type { ActorCtx, Connector, ConnectorCtx, WriteSpec } from "./engine/connector";
 export { ConnectorRegistry, SkipWrite } from "./engine/connector";

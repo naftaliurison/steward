@@ -104,6 +104,27 @@ describe("readStatusSubmission", () => {
     expect(fine.ok).toBe(true);
   });
 
+  it("allows an emoji name of 100 characters and refuses 101", () => {
+    const name = (n: number) => `:${"a".repeat(n - 2)}:`;
+    const base = { type: "out", from: "2026-11-12", to: "2026-11-12" };
+    expect(readStatusSubmission(values({ ...base, emoji: name(100) }), today).ok).toBe(true);
+    const long = readStatusSubmission(values({ ...base, emoji: name(101) }), today);
+    expect(!long.ok && long.errors.emoji).toBe("That emoji name is too long.");
+  });
+
+  it("treats a value that is not a string as empty and never throws", () => {
+    const v = values({ type: "out", from: "2026-11-12", to: "2026-11-12" });
+    const nodes = v.state.values as Record<string, Record<string, Record<string, unknown>>>;
+    (nodes.text as Record<string, Record<string, unknown>>).text = { type: "x", value: 42 };
+    (nodes.emoji as Record<string, Record<string, unknown>>).emoji = { type: "x", value: {} };
+    (nodes.from as Record<string, Record<string, unknown>>).from = { type: "x", selected_date: {} };
+    const r = readStatusSubmission(v, today);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.errors.from).toBe("Pick a start date");
+    expect(!r.ok && r.errors.text).toBeUndefined();
+    expect(!r.ok && r.errors.emoji).toBeUndefined();
+  });
+
   it("reads a full submission", () => {
     const result = readStatusSubmission(
       values({ type: "out", from: "2026-11-12", to: "2026-11-17", text: "Away", emoji: ":beach:" }),

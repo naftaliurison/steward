@@ -13,6 +13,8 @@ export type Deps = {
   slackClientId: string;
   slackClientSecret: string;
   appUrl: string;
+  /** Whether /demo/* serves visitors. */
+  demoEnabled: boolean;
   /** Run this after the response is sent (Slack wants an answer within 3 seconds). */
   defer: (work: Promise<unknown>) => void;
 };
@@ -35,6 +37,7 @@ export function depsFromEnv(env: Env, ctx: ExecutionContext): Deps {
     slackClientId: env.SLACK_CLIENT_ID,
     slackClientSecret: env.SLACK_CLIENT_SECRET,
     appUrl: env.APP_URL,
+    demoEnabled: env.DEMO_ENABLED === "1",
     defer: (work) => ctx.waitUntil(work),
   };
 }

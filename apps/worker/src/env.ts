@@ -7,4 +7,6 @@ export type Env = {
   TOKEN_KEY: string;
   /** Public origin of this Worker, no trailing slash, e.g. https://steward.example.workers.dev */
   APP_URL: string;
+  /** "1" turns the public demo (/demo/*) on. Anything else, or unset, leaves it off. */
+  DEMO_ENABLED?: string;
 };
