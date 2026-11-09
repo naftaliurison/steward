@@ -3,12 +3,11 @@ main = "src/index.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Replace database_id after `pnpm --filter @steward/worker exec wrangler d1 create steward`
-# (needs the Cloudflare account the owner creates; any id works for `wrangler dev` locally).
+# The production D1 database. Its id is an identifier, not a secret.
 [[d1_databases]]
 binding = "DB"
 database_name = "steward"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "aa32f5be-6e0f-490c-8246-e83872d97a5e"
 migrations_dir = "../../packages/core/drizzle"
 
 [triggers]
