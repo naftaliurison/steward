@@ -1,17 +1,15 @@
-import { useEffect, useState } from "react";
-
 export const REPO_URL = "https://github.com/naftaliurison/steward";
 const DESIGN_URL = `${REPO_URL}/blob/main/docs/superpowers/specs/2026-11-08-steward-availability-design.md`;
 
 const PRIMARY = "rounded bg-emerald-700 px-4 py-2 font-bold text-white";
-const SECONDARY = "rounded border border-neutral-400 px-4 py-2 font-bold";
+const SECONDARY = "rounded border border-neutral-500 px-4 py-2 font-bold";
 const SECTION_HEADING = "text-xl font-extrabold";
 
 const WORKS_TODAY = [
-  "Type /ooo in Slack and a short form opens: what is happening, from when, until when.",
-  "Save sets your Slack status until your last day ends, in your own time zone.",
+  "Type /ooo in Slack and a short form opens: what is happening, and until which day.",
+  "Once you have connected Steward to your Slack account, Save sets your Slack status until your last day ends, in your own time zone.",
   "A receipt lists each change Steward made, with an Undo button that works for five minutes.",
-  "Nothing is written until you press Save, and every write is recorded.",
+  "No status is set until you press Save, and every write is recorded.",
 ];
 const COMING_NEXT = [
   "Google Calendar out-of-office and the Gmail auto-reply, set and undone together with the status.",
@@ -20,12 +18,12 @@ const COMING_NEXT = [
   "Finding a time for a group and booking it with an agenda.",
 ];
 
-export function Product({ installable }: { installable: boolean }) {
+export function Product() {
   return (
     <div className="min-h-dvh bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
       <main className="mx-auto max-w-2xl space-y-12 px-4 py-16">
         <section>
-          <p className="font-bold text-emerald-700">Steward</p>
+          <p className="font-bold text-emerald-700 dark:text-emerald-400">Steward</p>
           <h1 className="mt-1 text-4xl font-extrabold">Steward Availability</h1>
           <p className="mt-4 text-lg">
             Say once that you are out, sick, remote or travelling. Steward sets your Slack status,
@@ -35,18 +33,13 @@ export function Product({ installable }: { installable: boolean }) {
             <a className={PRIMARY} href="/try">
               Try the demo
             </a>
-            {installable ? (
-              <a className={SECONDARY} href="/oauth/slack/install">
-                Add to Slack
-              </a>
-            ) : null}
             <a className={SECONDARY} href={REPO_URL}>
               Read the code
             </a>
           </div>
-          <p className="mt-3 text-sm text-neutral-500">
-            The demo runs in your browser against a pretend Slack. No sign-up, and nothing you do
-            there leaves it.
+          <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
+            The demo needs no sign-up. It runs the real code against a pretend Slack, not yours.
+            What you enter there is kept on this site for up to an hour, then deleted.
           </p>
         </section>
 
@@ -82,29 +75,10 @@ export function Product({ installable }: { installable: boolean }) {
           </p>
         </section>
       </main>
-      <footer className="mx-auto max-w-2xl space-y-1 px-4 pb-10 text-sm text-neutral-500">
+      <footer className="mx-auto max-w-2xl space-y-1 px-4 pb-10 text-sm text-neutral-500 dark:text-neutral-400">
         <p>Source available under the Business Source License 1.1.</p>
         <p>The demo uses Slack-inspired styling. Steward is not affiliated with Slack.</p>
       </footer>
     </div>
   );
-}
-
-/** The page as served: asks the Worker once whether the Slack install flow is configured. */
-export function ProductPage({ health }: { health: () => Promise<{ slack?: boolean }> }) {
-  const [installable, setInstallable] = useState(false);
-  useEffect(() => {
-    let live = true;
-    health()
-      .then((body) => {
-        if (live) setInstallable(body.slack === true);
-      })
-      .catch(() => {
-        // /health unreachable: keep the page without "Add to Slack"
-      });
-    return () => {
-      live = false;
-    };
-  }, [health]);
-  return <Product installable={installable} />;
 }
