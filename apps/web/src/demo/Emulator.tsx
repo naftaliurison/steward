@@ -65,11 +65,7 @@ export function Emulator(props: { api: DemoApi; store: Store; tz: string }) {
             ? "The demo is busy right now. Try again in a few minutes."
             : (demo.failure ?? "The demo couldn't start. Check your connection and try again.")}
         </p>
-        <button
-          type="button"
-          className={`${PANEL_BUTTON} mt-4`}
-          onClick={() => void demo.restart()}
-        >
+        <button type="button" className={`${PANEL_BUTTON} mt-4`} onClick={() => void demo.retry()}>
           Try again
         </button>
       </Centered>
@@ -213,9 +209,10 @@ export function Emulator(props: { api: DemoApi; store: Store; tz: string }) {
         </section>
         <section>
           <h3 className={PANEL_HEADING}>Session</h3>
-          <p className="mt-1 text-sm">{`This demo resets at ${formatTime(info.expiresAt, tz)}.`}</p>
+          <p className="mt-1 text-sm">{`This demo ends at ${formatTime(info.expiresAt, tz)} by your own clock.`}</p>
           <button
             type="button"
+            disabled={demo.working}
             className={`${PANEL_BUTTON} mt-2`}
             onClick={() => void demo.restart()}
           >

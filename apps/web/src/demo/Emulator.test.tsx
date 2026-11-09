@@ -13,8 +13,19 @@ import {
   staticSelect,
   textInput,
 } from "@steward/core/blocks";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { initialValues } from "../blockkit/values";
 import {
   type DemoApi,
   DemoBusy,
@@ -25,7 +36,7 @@ import {
   type DemoState,
 } from "./api";
 import { Emulator } from "./Emulator";
-import type { Store } from "./useDemoSession";
+import { type Store, useDemoSession } from "./useDemoSession";
 
 afterEach(cleanup);
 
@@ -276,5 +287,236 @@ describe("Emulator", () => {
     expect(
       screen.getByText("Slack-inspired styling. Steward is not affiliated with Slack."),
     ).toBeTruthy();
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+const COULDNT = "The demo couldn't start. Check your connection and try again.";
+const NO_ANSWER = "The demo didn't answer. Check your connection and try again.";
+const saved = () => JSON.stringify({ info, closed: [] });
+
+describe("Emulator after a bad connection", () => {
+  it("keeps the saved session when restoring it fails, and retries the restore", async () => {
+    const api = fakeApi();
+    const ok = api.getState;
+    api.getState = vi
+      .fn<DemoApi["getState"]>()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockImplementation(ok);
+    const store = memoryStore(saved());
+    render(<Emulator api={api} store={store} tz="Europe/London" />);
+    expect((await screen.findByRole("alert")).textContent).toBe(COULDNT);
+    expect(store.get("steward.demo")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByRole("textbox", { name: "Message Steward" });
+    expect(api.getState).toHaveBeenLastCalledWith("s1");
+    expect(api.createSession).not.toHaveBeenCalled();
+  });
+
+  it("says the backend's sentence when restoring is refused", async () => {
+    const api = fakeApi();
+    api.getState = vi.fn<DemoApi["getState"]>().mockRejectedValue(new DemoFailed("Down for now."));
+    render(<Emulator api={api} store={memoryStore(saved())} tz="Europe/London" />);
+    expect((await screen.findByRole("alert")).textContent).toBe("Down for now.");
+  });
+
+  it("restores a session it created when the first read failed, instead of creating another", async () => {
+    const api = fakeApi();
+    const ok = api.getState;
+    api.getState = vi
+      .fn<DemoApi["getState"]>()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockImplementation(ok);
+    render(<Emulator api={api} store={memoryStore()} tz="Europe/London" />);
+    await screen.findByText(COULDNT);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByRole("textbox", { name: "Message Steward" });
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a failed save inside the form, then clears it on a good save", async () => {
+    const api = fakeApi();
+    const ok = api.interact;
+    api.interact = vi
+      .fn<DemoApi["interact"]>()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockImplementation(ok);
+    send(await open(api), "/ooo");
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(NO_ANSWER);
+    expect(screen.getAllByText(NO_ANSWER)).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("heading", { name: TITLE });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("says the backend's sentence inside the form when a save is refused", async () => {
+    const api = fakeApi();
+    api.interact = vi
+      .fn<DemoApi["interact"]>()
+      .mockRejectedValueOnce(new DemoBusy("Slow down a little."));
+    send(await open(api), "/ooo");
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe("Slow down a little.");
+  });
+
+  it("starts over on a saved session that is unreadable or of the old shape", async () => {
+    for (const seed of ["not json {", JSON.stringify({ info: { id: "x" }, closed: [] })]) {
+      const api = fakeApi();
+      await open(api, memoryStore(seed));
+      expect(api.createSession).toHaveBeenCalledTimes(1);
+      expect(api.getState).not.toHaveBeenCalledWith("x");
+      cleanup();
+    }
+  });
+
+  it("tells the visitor their action was not carried out when the session ended under it", async () => {
+    const api = fakeApi();
+    const receipt: DemoState = {
+      now: START,
+      expiresAt: info.expiresAt,
+      clockOffsetMs: 0,
+      events: [
+        {
+          seq: 1,
+          at: START,
+          kind: "response",
+          payload: {
+            responseUrl: BASE,
+            text: TITLE,
+            blocks: [header(TITLE), actions(button("Undo", "status_undo", { value: "st_1" }))],
+            replaceOriginal: false,
+          },
+        },
+      ],
+    };
+    const fresh = api.getState;
+    api.getState = vi
+      .fn<DemoApi["getState"]>()
+      .mockResolvedValueOnce(receipt)
+      .mockImplementation(fresh);
+    api.interact = vi.fn<DemoApi["interact"]>().mockRejectedValueOnce(new DemoGone("gone"));
+    await open(api, memoryStore(saved()));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    expect(
+      await screen.findByText(
+        "Your demo hour ended, so this is a fresh one. What you just did was not saved.",
+      ),
+    ).toBeTruthy();
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+    expect(
+      (screen.getByRole("textbox", { name: "Message Steward" }) as HTMLInputElement).disabled,
+    ).toBe(false);
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it("says when the demo ends by the visitor's own clock", async () => {
+    await open(fakeApi());
+    expect(screen.getByText("This demo ends at 09:00 by your own clock.")).toBeTruthy();
+  });
+
+  it("creates one session under StrictMode", async () => {
+    const api = fakeApi();
+    render(
+      <StrictMode>
+        <Emulator api={api} store={memoryStore()} tz="Europe/London" />
+      </StrictMode>,
+    );
+    await screen.findByRole("textbox", { name: "Message Steward" });
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables Start over while a request is in flight", async () => {
+    const api = fakeApi();
+    const slow = deferred<{ text: string }>();
+    api.sendCommand = vi.fn<DemoApi["sendCommand"]>(() => slow.promise);
+    send(await open(api), "/ooo");
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Start over" }) as HTMLButtonElement).disabled,
+      ).toBe(true),
+    );
+    await act(async () => slow.resolve({ text: "" }));
+  });
+});
+
+describe("useDemoSession", () => {
+  const other: DemoSessionInfo = { ...info, id: "s2" };
+  const empty = (): DemoState => ({
+    now: START,
+    expiresAt: info.expiresAt,
+    clockOffsetMs: 0,
+    events: [],
+  });
+  const hook = async (api: DemoApi) => {
+    const view = renderHook(() =>
+      useDemoSession({ api, store: memoryStore(), tz: "Europe/London" }),
+    );
+    await waitFor(() => expect(view.result.current.phase).toBe("ready"));
+    return view;
+  };
+
+  it("drops the late answer of a request that began in an earlier session", async () => {
+    const api = fakeApi();
+    const slow = deferred<{ text: string }>();
+    api.createSession = vi
+      .fn<DemoApi["createSession"]>()
+      .mockResolvedValueOnce(info)
+      .mockResolvedValue(other);
+    const old = api.getState;
+    api.getState = vi.fn<DemoApi["getState"]>(async (id) => (id === "s2" ? empty() : old(id)));
+    api.sendCommand = vi.fn<DemoApi["sendCommand"]>(async (id) => {
+      await slow.promise;
+      return { text: `old reply for ${id}` };
+    });
+    const { result } = await hook(api);
+    let pending: Promise<void> | undefined;
+    act(() => {
+      pending = result.current.command("/ooo");
+    });
+    await act(async () => {
+      await result.current.restart();
+    });
+    expect(result.current.info?.id).toBe("s2");
+    await act(async () => {
+      slow.resolve({ text: "" });
+      await pending;
+    });
+    expect(result.current.info?.id).toBe("s2");
+    expect(result.current.notices).toEqual([]);
+    expect(result.current.screen.messages).toEqual([]);
+    expect(result.current.working).toBe(false);
+  });
+
+  it("drops a late field error after the form was closed", async () => {
+    const api = fakeApi();
+    const slow = deferred<Awaited<ReturnType<DemoApi["interact"]>>>();
+    api.interact = vi.fn<DemoApi["interact"]>(() => slow.promise);
+    const { result } = await hook(api);
+    await act(async () => {
+      await result.current.command("/ooo");
+    });
+    const opened = result.current.screen.openView;
+    if (!opened) throw new Error("the form did not open");
+    let pending: Promise<void> | undefined;
+    act(() => {
+      pending = result.current.submit(opened, initialValues(opened.view));
+    });
+    act(() => result.current.closeView(opened.seq));
+    await act(async () => {
+      slow.resolve({ response_action: "errors", errors: { to: "Too late." } });
+      await pending;
+    });
+    expect(result.current.errors).toEqual({});
   });
 });
