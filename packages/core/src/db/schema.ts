@@ -114,5 +114,11 @@ export const demoEvents = sqliteTable(
   (t) => [uniqueIndex("demo_events_session_seq_idx").on(t.sessionId, t.seq)],
 );
 
+/** One row per UTC day: how many demo sessions were started that day. The demo's daily budget is claimed here. */
+export const demoDays = sqliteTable("demo_days", {
+  day: text("day").primaryKey(),
+  sessions: integer("sessions").notNull(),
+});
+
 export type DemoSessionRow = typeof demoSessions.$inferSelect;
 export type DemoEventRow = typeof demoEvents.$inferSelect;

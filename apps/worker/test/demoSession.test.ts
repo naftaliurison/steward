@@ -17,6 +17,7 @@ import {
   createDemoSession,
   DEMO_MAX_ADVANCE_MS,
   DEMO_MAX_LIVE_SESSIONS,
+  DEMO_MAX_SESSIONS_PER_DAY,
   DEMO_ORPHAN_GRACE_MS,
   DEMO_SESSION_TTL_MS,
   demoDeps,
@@ -68,6 +69,7 @@ describe("demo sessions", () => {
     const s = await createDemoSession(deps, {});
     if ("error" in s) throw new Error("unexpected busy");
     const shifted = await advanceDemoClock(deps, s, 5 * 60 * 1000);
+    if (!shifted) throw new Error("the clock refused");
     expect(shifted.clockOffsetMs).toBe(5 * 60 * 1000);
     const d = demoDeps(deps, shifted);
     expect(d.now()).toBe(NOW + 5 * 60 * 1000);
@@ -105,7 +107,40 @@ describe("demo sessions", () => {
     expect(nestedRan).toBe(true);
     expect(rejectedRan).toBe(true);
     const capped = await advanceDemoClock(deps, shifted, DEMO_MAX_ADVANCE_MS);
-    expect(capped.clockOffsetMs).toBe(DEMO_MAX_ADVANCE_MS);
+    expect(capped?.clockOffsetMs).toBe(DEMO_MAX_ADVANCE_MS);
+  });
+
+  it("spends one of the day's session slots per create, and refuses when the day's budget is gone", async () => {
+    const deps = testDeps();
+    const day = new Date(NOW).toISOString().slice(0, 10);
+    const today = () => deps.db.select().from(schema.demoDays).where(eq(schema.demoDays.day, day));
+    await createDemoSession(deps, {});
+    await createDemoSession(deps, {});
+    expect((await today())[0]?.sessions).toBe(2);
+
+    await deps.db
+      .update(schema.demoDays)
+      .set({ sessions: DEMO_MAX_SESSIONS_PER_DAY })
+      .where(eq(schema.demoDays.day, day));
+    expect(await createDemoSession(deps, {})).toEqual({ error: "busy" });
+    expect((await today())[0]?.sessions).toBe(DEMO_MAX_SESSIONS_PER_DAY); // a refusal spends nothing
+
+    deps.clock.now = NOW + 24 * 60 * 60 * 1000; // tomorrow has its own budget
+    expect(await createDemoSession(deps, {})).not.toHaveProperty("error");
+  });
+
+  it("adds each clock advance to what the database holds, never goes back, and refuses at a day ahead", async () => {
+    const deps = testDeps();
+    const s = await createDemoSession(deps, {});
+    if ("error" in s) throw new Error("unexpected busy");
+    // Every call below passes the same stale session object, as requests racing each other would.
+    await advanceDemoClock(deps, s, 10 * 60 * 1000);
+    expect((await advanceDemoClock(deps, s, 10 * 60 * 1000))?.clockOffsetMs).toBe(20 * 60 * 1000);
+    expect((await advanceDemoClock(deps, s, -5 * 60 * 1000))?.clockOffsetMs).toBe(20 * 60 * 1000);
+    expect((await advanceDemoClock(deps, s, DEMO_MAX_ADVANCE_MS))?.clockOffsetMs).toBe(
+      DEMO_MAX_ADVANCE_MS,
+    );
+    expect(await advanceDemoClock(deps, s, 60 * 1000)).toBeNull();
   });
 
   it("refuses new sessions when too many are live", async () => {

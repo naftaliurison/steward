@@ -9,13 +9,21 @@ import {
   updatePersonProfile,
   upsertWorkspace,
 } from "@steward/core";
-import { and, eq, gt, inArray, like, lte, notInArray, sql } from "drizzle-orm";
+import { and, count, eq, gt, inArray, like, lt, lte, notInArray, sql } from "drizzle-orm";
 import type { Deps } from "../deps";
 import { isKnownTimeZone } from "../people";
 import { DemoSlackClient } from "./slackClient";
 
 export const DEMO_SESSION_TTL_MS = 60 * 60 * 1000;
-export const DEMO_MAX_LIVE_SESSIONS = 200;
+/**
+ * The demo's write budget. D1's free tier allows 100,000 row writes a day, shared with real
+ * workspaces. A save-and-undo cycle records 5 events and writes about 20 rows, so a session capped
+ * at 40 events writes about 200 rows with its seed and cleanup, and 150 sessions a day keep the
+ * demo near 30,000 writes: under a third of the allowance.
+ */
+export const DEMO_MAX_LIVE_SESSIONS = 50;
+export const DEMO_MAX_SESSIONS_PER_DAY = 150;
+export const DEMO_MAX_EVENTS = 40;
 export const DEMO_MAX_ADVANCE_MS = 24 * 60 * 60 * 1000;
 /** A session-less demo workspace younger than this may still be mid-create; the sweep leaves it be. */
 export const DEMO_ORPHAN_GRACE_MS = 5 * 60 * 1000;
@@ -37,11 +45,26 @@ const withWorkspace = (row: DemoSessionRow): DemoSession => ({
 });
 
 async function liveSessionCount(db: Db, now: number): Promise<number> {
-  const rows = await db
-    .select({ id: schema.demoSessions.id })
+  const [row] = await db
+    .select({ n: count() })
     .from(schema.demoSessions)
     .where(gt(schema.demoSessions.expiresAt, now));
-  return rows.length;
+  return row?.n ?? 0;
+}
+
+/** Takes one of today's session slots. One statement, so creates racing each other cannot overshoot the day. */
+async function claimDailySlot(db: Db, now: number): Promise<boolean> {
+  const day = new Date(now).toISOString().slice(0, 10);
+  const rows = await db
+    .insert(schema.demoDays)
+    .values({ day, sessions: 1 })
+    .onConflictDoUpdate({
+      target: schema.demoDays.day,
+      set: { sessions: sql`${schema.demoDays.sessions} + 1` },
+      setWhere: lt(schema.demoDays.sessions, DEMO_MAX_SESSIONS_PER_DAY),
+    })
+    .returning({ sessions: schema.demoDays.sessions });
+  return rows.length > 0;
 }
 
 /** A fresh demo tenant: workspace `demo:<id>`, three people already "connected", an hour to live. */
@@ -51,6 +74,9 @@ export async function createDemoSession(
 ): Promise<DemoSession | { error: "busy" }> {
   const now = deps.now();
   if ((await liveSessionCount(deps.db, now)) >= DEMO_MAX_LIVE_SESSIONS) return { error: "busy" };
+  // The live cap above is a soft check: creates racing each other can overshoot it by a few.
+  // The day's budget is exact.
+  if (!(await claimDailySlot(deps.db, now))) return { error: "busy" };
   const id = newId();
   try {
     const workspaceId = demoWorkspaceId(id);
@@ -112,20 +138,30 @@ export async function getDemoSession(
   return row ? withWorkspace(row) : null;
 }
 
+/**
+ * Moves the session's clock forward by `byMs`, never back. One statement that adds to what the
+ * database holds, so two presses at once both count. Null when the clock is already a day ahead.
+ */
 export async function advanceDemoClock(
-  deps: Deps,
+  deps: Pick<Deps, "db">,
   session: DemoSession,
   byMs: number,
-): Promise<DemoSession> {
-  const clockOffsetMs = Math.min(
-    DEMO_MAX_ADVANCE_MS,
-    Math.max(0, session.clockOffsetMs + (Number.isFinite(byMs) ? byMs : 0)),
-  );
-  await deps.db
+): Promise<DemoSession | null> {
+  const add = Number.isFinite(byMs) && byMs > 0 ? Math.floor(byMs) : 0;
+  const rows = await deps.db
     .update(schema.demoSessions)
-    .set({ clockOffsetMs })
-    .where(eq(schema.demoSessions.id, session.id));
-  return { ...session, clockOffsetMs };
+    .set({
+      clockOffsetMs: sql`min(${schema.demoSessions.clockOffsetMs} + ${add}, ${DEMO_MAX_ADVANCE_MS})`,
+    })
+    .where(
+      and(
+        eq(schema.demoSessions.id, session.id),
+        lt(schema.demoSessions.clockOffsetMs, DEMO_MAX_ADVANCE_MS),
+      ),
+    )
+    .returning({ clockOffsetMs: schema.demoSessions.clockOffsetMs });
+  const row = rows[0];
+  return row ? { ...session, clockOffsetMs: row.clockOffsetMs } : null;
 }
 
 /**

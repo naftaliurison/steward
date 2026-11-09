@@ -1,10 +1,11 @@
 import { getPerson, schema } from "@steward/core";
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
   advanceDemoClock,
   createDemoSession,
+  DEMO_MAX_EVENTS,
   type DemoSession,
   demoDeps,
   getDemoSession,
@@ -81,6 +82,18 @@ async function stateOf(deps: Deps, session: DemoSession) {
   };
 }
 
+const SPENT = "This demo session has done all it can. Start over to continue.";
+const CLOCK_AT_CAP = "The demo clock is already a day ahead. Start over to rewind it.";
+
+/** True once the session has recorded all the events it may. */
+async function isSpent(deps: Deps, session: DemoSession): Promise<boolean> {
+  const [row] = await deps.db
+    .select({ n: count() })
+    .from(schema.demoEvents)
+    .where(eq(schema.demoEvents.sessionId, session.id));
+  return (row?.n ?? 0) >= DEMO_MAX_EVENTS;
+}
+
 export function demoRoutes(deps: Deps) {
   const r = new Hono<Vars>();
 
@@ -136,6 +149,7 @@ export function demoRoutes(deps: Deps) {
     const text = isObject(body) && typeof body.text === "string" ? body.text.trim() : "";
     if (!text.startsWith("/ooo"))
       return c.json({ error: "Only /ooo is available in the demo." }, 400);
+    if (await isSpent(deps, session)) return c.json({ error: SPENT }, 409);
     const you = await getPerson(deps.db, session.youPersonId);
     const d = demoDeps(deps, session);
     const form = new URLSearchParams({
@@ -158,6 +172,7 @@ export function demoRoutes(deps: Deps) {
     if (!isObject(body) || !isInteractionShaped(body)) {
       return c.json({ error: "Send a Slack-shaped interaction payload." }, 400);
     }
+    if (await isSpent(deps, session)) return c.json({ error: SPENT }, 409);
     const you = await getPerson(deps.db, session.youPersonId);
     const payload = demoInteractionPayload(body, session, you);
     const d = demoDeps(deps, session);
@@ -176,6 +191,7 @@ export function demoRoutes(deps: Deps) {
     if (minutes === null || minutes < 0 || minutes > 1440)
       return c.json({ error: "Send { minutes: number } between 0 and 1440." }, 400);
     const advanced = await advanceDemoClock(deps, session, minutes * 60 * 1000);
+    if (!advanced) return c.json({ error: CLOCK_AT_CAP }, 400);
     return c.json(await stateOf(deps, advanced));
   });
 

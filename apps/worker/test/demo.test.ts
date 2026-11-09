@@ -3,6 +3,7 @@ import { schema } from "@steward/core";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
+import { DEMO_MAX_EVENTS } from "../src/demo/session";
 import { demoInteractionPayload } from "../src/routes/demo";
 import { NOW, testDeps } from "./helpers";
 
@@ -260,6 +261,34 @@ describe("/demo", () => {
       expect(res.status).toBe(201);
       expect(((await res.json()) as Created).you.tz).toBe("UTC");
     }
+  });
+
+  it("stops a session that has done all it can, with a sentence that says so", async () => {
+    const app = createApp(testDeps());
+    const { id } = (await (await post(app, "/demo/sessions", {})).json()) as Created;
+    for (let i = 0; i < DEMO_MAX_EVENTS; i++) {
+      expect((await post(app, `/demo/${id}/command`, { text: "/ooo" })).status).toBe(200);
+    }
+    const spent = { error: "This demo session has done all it can. Start over to continue." };
+    const command = await post(app, `/demo/${id}/command`, { text: "/ooo" });
+    expect(command.status).toBe(409);
+    expect(await command.json()).toEqual(spent);
+    const today = todayIn("UTC", NOW);
+    const interact = await post(app, `/demo/${id}/interact`, submission(today, today));
+    expect(interact.status).toBe(409);
+    expect(await interact.json()).toEqual(spent);
+    expect((await getState(app, id)).events).toHaveLength(DEMO_MAX_EVENTS);
+  });
+
+  it("says so when the clock cannot go further", async () => {
+    const app = createApp(testDeps());
+    const { id } = (await (await post(app, "/demo/sessions", {})).json()) as Created;
+    expect((await post(app, `/demo/${id}/advance`, { minutes: 1440 })).status).toBe(200);
+    const more = await post(app, `/demo/${id}/advance`, { minutes: 5 });
+    expect(more.status).toBe(400);
+    expect(await more.json()).toEqual({
+      error: "The demo clock is already a day ahead. Start over to rewind it.",
+    });
   });
 });
 
