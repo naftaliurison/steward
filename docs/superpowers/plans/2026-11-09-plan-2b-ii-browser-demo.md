@@ -3346,3 +3346,33 @@ git commit -m "feat(web): the product page: what works today, what comes next, h
 1. Whole-branch review on the most capable model, as in earlier plans, with attention to: the import rule for `apps/web`; that the emulator never states a product sentence the backend did not send; the accessibility floor; the bundle (`apps/web/dist`) containing no server code.
 2. Run it for real: `pnpm --filter @steward/worker db:migrate:local`, `pnpm build`, then start `wrangler dev` and, in a browser, open `/` and `/try`; type `/ooo`, save, undo, save again, press "+5 min", press Undo (the refusal sentence appears), press "+1 day" (the status shows as cleared). Check `/health`, `/demo/sessions` (POST) and a deep link such as `/try/` all behave. Repeat at 375 px wide and in dark mode.
 3. Record deviations in this document, open the pull request, and ask the owner for the merge word.
+
+---
+
+## Deviations recorded during execution (2026-11-09)
+
+What was built differs from the tasks above in these ways. Each came from a review finding or from checking the result in a real browser.
+
+**The demo's limits (Tasks 1 to 3)**
+- **An action budget replaced the event cap.** The event cap counted and then acted, so a burst passed it (the final review sent 100 simultaneous saves through a cap of 40). Each session now has `DEMO_MAX_ACTIONS = 24`, claimed by `claimDemoAction` in one UPDATE on a new `demo_sessions.actions_used` column before any work is done. `/command`, `/interact` and `/advance` each claim one. `DEMO_MAX_EVENTS` and `isSpent` are gone.
+- **Smaller constants, counted the way D1 bills.** D1 bills index entries and deletes as written rows, about three times the plan's estimate. `DEMO_MAX_LIVE_SESSIONS` is 20 and `DEMO_MAX_SESSIONS_PER_DAY` is 60, which keeps the demo under about 45,000 billed rows a day in the worst case.
+- **The clock.** `/advance` takes a whole number of minutes from 1 to 1440 and costs an action. Zero and fractions are refused.
+- **Two refusals, each true.** `createDemoSession` returns `"full"` (live cap) or `"closed"` (day's budget) instead of `"busy"`, and the route answers each with its own sentence.
+- **A second, global rate limiter** (`DEMO_GLOBAL_LIMITER`, 40 requests a minute for all demo traffic together) so the demo cannot use up the Worker's daily request allowance, which the Slack routes share. The per-visitor limit is 30 a minute.
+- **Cleanup.** The expired-sessions step has its own try/catch and returns 0 when it fails, so the sweep still runs. Orphan workspaces are matched with an exact, case-sensitive prefix (`substr(id, 1, 5) = 'demo:'`), not LIKE.
+- **`applyD1Migrations`** takes a structural type instead of `D1Database`, because `packages/availability` typechecks core's testing file without Workers types.
+- **Migration 0005** adds `demo_sessions.actions_used` and an index on `statuses.undo_until_ms`, which the minute tick filters on.
+- **No request logs.** `[observability.logs] invocation_logs = false`: the tick's line and console errors are kept, visitors' requests and OAuth callback URLs are not.
+
+**The web app (Tasks 4 to 8)**
+- **`run_worker_first`** also lists `"/health/"`.
+- **The Block Kit renderer was hardened after review:** the form dialog moves focus in, keeps Tab inside and returns focus on close; every block renders inside an error boundary so a malformed block shows its "unsupported" box and nothing else breaks; `emojify` reads own keys only; only http and https URLs become links; mrkdwn requires word boundaries and non-space inside its marks and leaves code spans literal; field errors are tied to their inputs with `aria-invalid` and `aria-describedby`.
+- **The session hook was hardened after review:** `retry()` restores the saved session after a bad connection instead of creating a new one, and a created session is saved before its first read; a failed save is shown inside the form under the `_form` error key, not in the thread behind it; a generation counter discards answers that belong to an earlier session, and "Start over" is disabled while a request is in flight; `readSaved` validates the saved shape; re-entry is guarded with a ref. New visitor sentences: "Your demo hour ended, so this is a fresh one. What you just did was not saved." and "This demo ends at HH:MM by your own clock." `DemoBusy` now also carries the rate limiters' sentences, and the busy screen shows the backend's sentence when there is one.
+- **The product page offers no install.** "Add to Slack", `ProductPage` and the `slack` field on `/health` were built as planned and then removed: the Slack app is not publicly distributed, so the button would fail for visitors, and opening installs to the public is the owner's decision. `Product` takes no props and `/health` answers `{ "ok": true }` as before.
+- **Page copy changed to be true of the code:** the demo is described as running on this site and kept for up to an hour (not "in your browser"), and the status line says it applies once the person has connected Steward to their Slack account.
+- **Outside the plan's file list:** the README introduction no longer states planned features in the present tense; the expired-install sentence in `routes/oauth.ts` no longer points at a product-page link.
+- **Counts.** 222 tests at the end of this plan (127 at its start); 16 commits after the plan commit, eight of them fixes.
+
+**Verified in a real browser** against a local Worker with the demo enabled: asset routing (API paths reach the Worker, other paths get the page), the whole `/ooo` flow, Undo in place, the five-minute refusal after advancing the clock, a refused command, a reload, 375 px width, light and dark mode.
+
+**Carried forward:** "Start over" leaves the old session alive until it expires; the live cap can overshoot by the size of a burst; rows written by a request that outlives its session's cleanup are stranded; notices are `aria-live="polite"` rather than alerts; `/command` and `/interact` could return the new state and halve the demo's requests; the spec's section 7 does not list `demo_days`, and section 10 should mention Workers Logs. Switching the demo on in production is the owner's step (`DEMO_ENABLED=1`), after this plan is deployed; whether the two rate-limit bindings deploy on the free plan is only known at that deploy.
