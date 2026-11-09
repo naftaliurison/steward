@@ -930,3 +930,21 @@ Co-Authored-By: Claude <model> <noreply@anthropic.com>"
 **Placeholder scan:** none; every code step shows the code.
 
 **Type consistency:** `handleSlashCommand(deps, form): Promise<string>` and `handleInteraction(deps, rawPayload): Promise<InteractionAnswer>` are called that way by both route files; `demoDeps` returns `Deps & { settle }` and the routes call `settle()` before answering; `getDemoSession` returns null for expired sessions and the `/:id/*` middleware turns that into 404; `runTick` returns both counters and the tick tests expect both; `DEMO_PEOPLE[0]` is "you" and `createDemoSession` stores `youPersonId` from it; the demo test's `submission(from, to)` keys match the form's `FIELD` ids.
+
+---
+
+## Deviations recorded during execution (2026-11-09)
+
+What was built differs from the tasks above in these ways. Each came from a review finding.
+
+- **Seeding rolls back.** `createDemoSession` wraps seeding in try/catch. `deleteDemoWorkspace(db, sessionId)` was extracted from cleanup and removes a half-built workspace before the error is rethrown.
+- **Orphan sweep with a grace.** `cleanupDemoSessions` also deletes `demo:%` workspaces that have no session row and are older than `DEMO_ORPHAN_GRACE_MS` (five minutes), found in one query. A failing sweep is logged and does not fail the tick. The returned number counts expired sessions that were removed, not orphans.
+- **Deferred work.** `demoDeps().defer` attaches the error log at once, and `settle()` loops until nothing is pending, so work deferred by deferred work is finished before the response.
+- **The visitor chooses even less.** `demoInteractionPayload(body, session, you)` is exported and overrides `view.private_metadata` for every interaction type, not only `view_submission`.
+- **Routes.** `trigger_id` is `demo-<uuid>`. `/advance` refuses minutes outside 0 to 1440 with a 400. Request bodies over 32 KB get a 413. A `view_submission` or `block_actions` payload that lacks the parts the handler reads gets a 400. `handleInteraction` itself returns an empty answer for such payloads, so the signed Slack route cannot throw on them either.
+- **Event numbers.** `DemoSlackClient.record` computes `seq` inside the INSERT, and the `(session_id, seq)` index is unique. Migration `0003_workable_mephistopheles.sql` makes that change and adds indexes on `statuses.workspace_id` and `audit.workspace_id`, which cleanup deletes by. Verified on a local D1 (Miniflare): six concurrent commands recorded distinct numbers.
+- **Form input is bounded.** The emoji field is limited to 100 characters, and `readStatusSubmission` treats any value that is not a string as empty.
+- **Off by default.** `/demo/*` answers 503 unless `DEMO_ENABLED` is `1` (`Deps.demoEnabled`). It stays off until Plan 2b-ii has shipped the demo's guard rails: a daily write budget, a per-session event cap, a rate limit, and a tick that fits D1's per-invocation query limit.
+- **Counts.** 126 tests at the end of this plan (95 at its start); eight commits after the plan commit.
+
+Carried forward, not built here: a single-statement clock advance with a refusal at the 24-hour cap, an atomic session budget, set-based cleanup and undo expiry, and status events that name the person instead of carrying the fake token (all Plan 2b-ii); the demo's place in the tick once the tick fires statuses, and Workers Logs (Plan 3). The spec's `demo_session_id` column (section 7) is replaced by the `demo:<session>` workspace id, which already scopes every row.
