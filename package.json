@@ -9,7 +9,8 @@
   "scripts": {
     "lint": "biome check packages apps package.json tsconfig.base.json vitest.config.ts",
     "lint:fix": "biome check --write packages apps package.json tsconfig.base.json vitest.config.ts",
-    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/availability && tsc --noEmit -p apps/worker && tsc --noEmit -p apps/worker/tsconfig.test.json",
+    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/availability && tsc --noEmit -p apps/worker && tsc --noEmit -p apps/worker/tsconfig.test.json && tsc --noEmit -p apps/web",
+    "build": "pnpm --filter @steward/web build && pnpm --filter @steward/worker build",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",
     "@types/node": "^22.0.0",
+    "jsdom": "^31.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }

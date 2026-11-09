@@ -16,3 +16,32 @@ crons = ["* * * * *"]
 # APP_URL and SLACK_CLIENT_ID are not set here on purpose: a `[vars]` table would overwrite
 # production values on every deploy. Locally they come from .dev.vars (see .dev.vars.example);
 # in production set them once with `wrangler secret put APP_URL` and `wrangler secret put SLACK_CLIENT_ID`.
+
+# Per-visitor rate limit for the public demo: 30 requests a minute from one address, counted per
+# Cloudflare location.
+[[ratelimits]]
+name = "DEMO_LIMITER"
+namespace_id = "1001"
+simple = { limit = 30, period = 60 }
+
+# All demo traffic together: at most 40 requests a minute per Cloudflare location, so the demo cannot use up the Worker's daily request allowance, which the Slack routes share.
+[[ratelimits]]
+name = "DEMO_GLOBAL_LIMITER"
+namespace_id = "1002"
+simple = { limit = 40, period = 60 }
+
+# Workers Logs: the tick's one line a minute and every console.error are kept and searchable.
+[observability]
+enabled = true
+
+# Keep the tick's line and console errors; do not keep a log of every request (visitors' requests
+# and OAuth callback URLs would be in it).
+[observability.logs]
+invocation_logs = false
+
+# The web app (apps/web) is built to static files and served from here. API paths always reach
+# the Worker; any other path that is not a file falls back to index.html.
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/slack/*", "/oauth/*", "/demo/*", "/health", "/health/"]

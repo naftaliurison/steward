@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
   advanceDemoClock,
+  claimDemoAction,
   createDemoSession,
   type DemoSession,
   demoDeps,
@@ -26,8 +27,17 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<u
   }
 }
 
-const responseUrlFor = (session: Pick<DemoSession, "id">) =>
-  `https://hooks.slack.com/demo/${session.id}`;
+const MESSAGE_TS = /^\d{1,10}$/;
+
+/**
+ * Where a receipt goes. A button press names the message it lives on (Slack's
+ * `container.message_ts`), so a receipt that replaces the original can say which one.
+ */
+function responseUrlFor(session: Pick<DemoSession, "id">, body?: Record<string, unknown>): string {
+  const base = `https://hooks.slack.com/demo/${session.id}`;
+  const ts = body && isObject(body.container) ? body.container.message_ts : undefined;
+  return typeof ts === "string" && MESSAGE_TS.test(ts) ? `${base}/${ts}` : base;
+}
 
 /** True when the body has the parts the handler reads for its type; other types pass through. */
 function isInteractionShaped(body: Record<string, unknown>): boolean {
@@ -53,7 +63,7 @@ export function demoInteractionPayload(
   session: Pick<DemoSession, "id" | "workspaceId">,
   you: { slackUserId: string; displayName: string } | null | undefined,
 ): Record<string, unknown> {
-  const url = responseUrlFor(session);
+  const url = responseUrlFor(session, body);
   const payload: Record<string, unknown> = {
     ...body,
     team: { id: session.workspaceId },
@@ -81,8 +91,47 @@ async function stateOf(deps: Deps, session: DemoSession) {
   };
 }
 
+const SPENT = "This demo session has done all it can. Start over to continue.";
+const CLOCK_AT_CAP = "The demo clock is already a day ahead. Start over to rewind it.";
+
 export function demoRoutes(deps: Deps) {
   const r = new Hono<Vars>();
+
+  // One visitor may not hammer the demo. The key is the address Cloudflare saw the request come from.
+  // A limiter that fails lets the request through: the write budget is the hard limit, this is the polite one.
+  r.use("*", async (c, next) => {
+    if (deps.demoLimiter) {
+      const key = c.req.header("cf-connecting-ip") ?? "unknown";
+      let allowed = true;
+      try {
+        allowed = (await deps.demoLimiter.limit({ key })).success;
+      } catch (err) {
+        console.error("demo rate limiter failed", { err });
+      }
+      if (!allowed) return c.json({ error: "Slow down a little, then try again." }, 429);
+    }
+    // All demo traffic together, so it cannot use up the Worker's daily request allowance.
+    if (deps.demoGlobalLimiter) {
+      let allowed = true;
+      try {
+        allowed = (await deps.demoGlobalLimiter.limit({ key: "all" })).success;
+      } catch (err) {
+        console.error("demo global rate limiter failed", { err });
+      }
+      if (!allowed)
+        return c.json({ error: "The demo is busy right now. Try again in a minute." }, 429);
+    }
+    await next();
+  });
+
+  // A page on another site can make a visitor's browser send form-typed POSTs without asking first.
+  // The demo takes JSON only, which a browser will not send cross-site without permission.
+  r.use("*", async (c, next) => {
+    const type = (c.req.header("content-type") ?? "").toLowerCase();
+    if (c.req.method === "POST" && !type.startsWith("application/json"))
+      return c.json({ error: "Send JSON." }, 415);
+    await next();
+  });
 
   // A visitor can post anything; none of it may be large.
   r.use(
@@ -97,7 +146,16 @@ export function demoRoutes(deps: Deps) {
     const body = await readJson(c);
     const visitorTz = isObject(body) && typeof body.tz === "string" ? body.tz : undefined;
     const session = await createDemoSession(deps, { visitorTz });
-    if ("error" in session) return c.json({ error: "busy" }, 429);
+    if ("error" in session)
+      return c.json(
+        {
+          error:
+            session.error === "full"
+              ? "The demo is full right now. Try again in a few minutes."
+              : "The demo has had all its visitors for today. It opens again at midnight UTC.",
+        },
+        429,
+      );
     const people = await deps.db
       .select()
       .from(schema.people)
@@ -136,6 +194,7 @@ export function demoRoutes(deps: Deps) {
     const text = isObject(body) && typeof body.text === "string" ? body.text.trim() : "";
     if (!text.startsWith("/ooo"))
       return c.json({ error: "Only /ooo is available in the demo." }, 400);
+    if (!(await claimDemoAction(deps, session))) return c.json({ error: SPENT }, 409);
     const you = await getPerson(deps.db, session.youPersonId);
     const d = demoDeps(deps, session);
     const form = new URLSearchParams({
@@ -158,6 +217,7 @@ export function demoRoutes(deps: Deps) {
     if (!isObject(body) || !isInteractionShaped(body)) {
       return c.json({ error: "Send a Slack-shaped interaction payload." }, 400);
     }
+    if (!(await claimDemoAction(deps, session))) return c.json({ error: SPENT }, 409);
     const you = await getPerson(deps.db, session.youPersonId);
     const payload = demoInteractionPayload(body, session, you);
     const d = demoDeps(deps, session);
@@ -170,12 +230,18 @@ export function demoRoutes(deps: Deps) {
     const session = c.get("session");
     const body = await readJson(c);
     const minutes =
-      isObject(body) && typeof body.minutes === "number" && Number.isFinite(body.minutes)
+      isObject(body) &&
+      typeof body.minutes === "number" &&
+      Number.isInteger(body.minutes) &&
+      body.minutes >= 1 &&
+      body.minutes <= 1440
         ? body.minutes
         : null;
-    if (minutes === null || minutes < 0 || minutes > 1440)
-      return c.json({ error: "Send { minutes: number } between 0 and 1440." }, 400);
+    if (minutes === null)
+      return c.json({ error: "Send { minutes: a whole number from 1 to 1440 }." }, 400);
+    if (!(await claimDemoAction(deps, session))) return c.json({ error: SPENT }, 409);
     const advanced = await advanceDemoClock(deps, session, minutes * 60 * 1000);
+    if (!advanced) return c.json({ error: CLOCK_AT_CAP }, 400);
     return c.json(await stateOf(deps, advanced));
   });
 

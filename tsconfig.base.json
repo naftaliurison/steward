@@ -11,6 +11,7 @@
     "noEmit": true,
     "lib": ["ES2022", "DOM"],
     "paths": {
+      "@steward/core/blocks": ["./packages/core/src/slack/blocks.ts"],
       "@steward/core": ["./packages/core/src/index.ts"],
       "@steward/core/testing": ["./packages/core/src/testing.ts"],
       "@steward/availability": ["./packages/availability/src/index.ts"]

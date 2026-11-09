@@ -47,6 +47,7 @@ export const statuses = sqliteTable(
   (t) => [
     index("statuses_person_state_idx").on(t.personId, t.state),
     index("statuses_workspace_idx").on(t.workspaceId),
+    index("statuses_undo_until_idx").on(t.undoUntilMs),
   ],
 );
 
@@ -98,6 +99,8 @@ export const demoSessions = sqliteTable("demo_sessions", {
   /** Added to the real clock for every request in this session (the emulator's "advance time"). */
   clockOffsetMs: integer("clock_offset_ms").notNull().default(0),
   youPersonId: text("you_person_id").notNull(),
+  /** Actions the visitor has taken (a command, a button or form, a clock press); capped per session. */
+  actionsUsed: integer("actions_used").notNull().default(0),
 });
 
 /** Everything the fake Slack was asked to do, in order: `view` (views.open), `response` (response_url post), `status` (profile status set or cleared). */
@@ -113,6 +116,12 @@ export const demoEvents = sqliteTable(
   },
   (t) => [uniqueIndex("demo_events_session_seq_idx").on(t.sessionId, t.seq)],
 );
+
+/** One row per UTC day: how many demo sessions were started that day. The demo's daily budget is claimed here. */
+export const demoDays = sqliteTable("demo_days", {
+  day: text("day").primaryKey(),
+  sessions: integer("sessions").notNull(),
+});
 
 export type DemoSessionRow = typeof demoSessions.$inferSelect;
 export type DemoEventRow = typeof demoEvents.$inferSelect;

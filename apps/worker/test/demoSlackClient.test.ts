@@ -50,7 +50,7 @@ describe("DemoSlackClient", () => {
       view: { callback_id: "cb" },
     });
     expect(JSON.parse(events[1]?.payload ?? "{}")).toEqual({
-      userToken: "xoxp-demo-U_DANA",
+      slackUserId: "U_DANA",
       status: { text: "Out", emoji: ":palm_tree:", expiration: 99 },
     });
     expect(JSON.parse(events[2]?.payload ?? "{}")).toMatchObject({
@@ -58,10 +58,26 @@ describe("DemoSlackClient", () => {
       replaceOriginal: false,
     });
     expect(JSON.parse(events[3]?.payload ?? "{}")).toEqual({
-      userToken: "xoxp-demo-U_DANA",
+      slackUserId: "U_DANA",
       status: null,
     });
     expect(await readDemoEvents(db, "S2")).toHaveLength(1);
+  });
+
+  it("records whose status it is, never the token", async () => {
+    const db = createTestDb();
+    const slack = new DemoSlackClient(db, "S1", () => 1);
+    await slack.setUserStatus({
+      userToken: "xoxp-demo-U_NOA",
+      text: "Out",
+      emoji: ":x:",
+      expiration: 0,
+    });
+    await slack.clearUserStatus({ userToken: "something-else" });
+    const payloads = (await readDemoEvents(db, "S1")).map((e) => e.payload);
+    expect(JSON.parse(payloads[0] ?? "{}")).toMatchObject({ slackUserId: "U_NOA" });
+    expect(JSON.parse(payloads[1] ?? "{}")).toEqual({ slackUserId: "unknown", status: null });
+    expect(payloads.join("")).not.toContain("xoxp");
   });
 
   it("refuses untrusted response URLs like the real client and answers users.info with null", async () => {

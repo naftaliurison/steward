@@ -12,6 +12,11 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(runTick(depsFromEnv(env, ctx)));
+    ctx.waitUntil(
+      runTick(depsFromEnv(env, ctx)).then(
+        (result) => console.log("tick", result),
+        (err) => console.error("tick failed", { err }),
+      ),
+    );
   },
 } satisfies ExportedHandler<Env>;

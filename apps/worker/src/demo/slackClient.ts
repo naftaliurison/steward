@@ -12,6 +12,15 @@ import {
 } from "@steward/core";
 import { eq, sql } from "drizzle-orm";
 
+/** Demo people's user tokens are this prefix plus their Slack user id (session.ts seals them that way). */
+export const DEMO_USER_TOKEN_PREFIX = "xoxp-demo-";
+
+/** Whose token this is. The recorded state names the person and never carries the token. */
+const userOf = (userToken: string): string =>
+  userToken.startsWith(DEMO_USER_TOKEN_PREFIX)
+    ? userToken.slice(DEMO_USER_TOKEN_PREFIX.length)
+    : "unknown";
+
 export type DemoEventKind = "view" | "response" | "status";
 
 /**
@@ -70,13 +79,13 @@ export class DemoSlackClient implements SlackClient {
 
   async setUserStatus(args: SetStatusArgs): Promise<void> {
     await this.record("status", {
-      userToken: args.userToken,
+      slackUserId: userOf(args.userToken),
       status: { text: args.text, emoji: args.emoji, expiration: args.expiration },
     });
   }
 
   async clearUserStatus(args: { userToken: string }): Promise<void> {
-    await this.record("status", { userToken: args.userToken, status: null });
+    await this.record("status", { slackUserId: userOf(args.userToken), status: null });
   }
 
   /** Demo people are seeded with their profile already synced, so this is not reached in practice. */
