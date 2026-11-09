@@ -1,4 +1,4 @@
-import { schema, upsertWorkspace } from "@steward/core";
+import { ensurePerson, schema, upsertWorkspace } from "@steward/core";
 import { applyD1Migrations } from "@steward/core/testing";
 import { eq } from "drizzle-orm";
 import { Miniflare } from "miniflare";
@@ -90,13 +90,56 @@ describe("the demo on the real D1 driver (Miniflare)", () => {
     await workspace("demo:old-orphan", NOW);
     await workspace("demo:young-orphan", later - 1000);
     await workspace("T_REAL", 1);
+    const real = await ensurePerson(deps.db, "T_REAL", "U_REAL", "Real");
+    // One status, one target and one audit row each for an expiring session, the fresh one and T_REAL.
+    const expiring = (await deps.db.select().from(schema.demoSessions)).find(
+      (x) => x.id !== fresh.id,
+    );
+    if (!expiring) throw new Error("no expiring session");
+    const owners = [
+      { tag: "EXP", workspaceId: demoWorkspaceId(expiring.id), personId: expiring.youPersonId },
+      { tag: "FRESH", workspaceId: demoWorkspaceId(fresh.id), personId: fresh.youPersonId },
+      { tag: "REAL", workspaceId: "T_REAL", personId: real.id },
+    ];
+    for (const o of owners) {
+      await deps.db.insert(schema.statuses).values({
+        id: `S_${o.tag}`,
+        workspaceId: o.workspaceId,
+        personId: o.personId,
+        type: "out",
+        startMs: NOW,
+        endMs: NOW + 1000,
+        text: "",
+        emoji: "",
+        state: "scheduled",
+        source: "form",
+        createdAt: NOW,
+      });
+      await deps.db.insert(schema.statusTargets).values({
+        id: `ST_${o.tag}`,
+        statusId: `S_${o.tag}`,
+        system: "slack",
+        op: "set",
+        spec: "{}",
+        state: "done",
+        idempotencyKey: `k-${o.tag}`,
+      });
+      await deps.db.insert(schema.audit).values({
+        id: `A_${o.tag}`,
+        workspaceId: o.workspaceId,
+        personId: o.personId,
+        action: "set",
+        result: "ok",
+        at: NOW,
+      });
+    }
     await deps.db.insert(schema.demoDays).values({ day: "2026-01-01", sessions: 9 });
 
     deps.clock.now = later;
     queries = 0;
     const result = await runTick(deps);
     expect(result.demoSessionsRemoved).toBe(5);
-    expect(queries).toBeLessThanOrEqual(20);
+    expect(queries).toBeLessThanOrEqual(16);
 
     const ids = (await deps.db.select({ id: schema.workspaces.id }).from(schema.workspaces)).map(
       (w) => w.id,
@@ -107,7 +150,14 @@ describe("the demo on the real D1 driver (Miniflare)", () => {
     expect((await deps.db.select().from(schema.demoEvents)).map((e) => e.sessionId)).toEqual([
       fresh.id,
     ]);
-    expect(await deps.db.select().from(schema.people)).toHaveLength(3);
+    expect(await deps.db.select().from(schema.people)).toHaveLength(4);
+    const rowIds = async (
+      table: typeof schema.statuses | typeof schema.statusTargets | typeof schema.audit,
+    ) => (await deps.db.select({ id: table.id }).from(table)).map((r) => r.id).sort();
+    expect(await rowIds(schema.statuses)).toEqual(["S_FRESH", "S_REAL"]);
+    expect(await rowIds(schema.statusTargets)).toEqual(["ST_FRESH", "ST_REAL"]);
+    expect(await rowIds(schema.audit)).toEqual(["A_FRESH", "A_REAL"]);
+    expect((await deps.db.select().from(schema.people)).map((p) => p.id)).toContain(real.id);
     expect((await deps.db.select().from(schema.demoDays)).map((d) => d.day)).not.toContain(
       "2026-01-01",
     );

@@ -78,6 +78,7 @@ export async function createDemoSession(
   if ((await liveSessionCount(deps.db, now)) >= DEMO_MAX_LIVE_SESSIONS) return { error: "busy" };
   // The live cap above is a soft check: creates racing each other can overshoot it by a few.
   // The day's budget is exact.
+  // A seed that throws after this point keeps its slot for the day: the budget fails closed.
   if (!(await claimDailySlot(deps.db, now))) return { error: "busy" };
   const id = newId();
   try {
@@ -252,27 +253,33 @@ export async function cleanupDemoSessions(deps: Pick<Deps, "db" | "now">): Promi
   const expired = lte(sessions.expiresAt, now);
 
   const [row] = await deps.db.select({ n: count() }).from(sessions).where(expired);
-  const removed = row?.n ?? 0;
+  let removed = row?.n ?? 0;
   if (removed > 0) {
-    await deleteOwnedBy(
-      deps.db,
-      sql`(select 'demo:' || ${sessions.id} from ${sessions} where ${sessions.expiresAt} <= ${now})`,
-    );
-    await deps.db
-      .delete(schema.demoEvents)
-      .where(
-        inArray(
-          schema.demoEvents.sessionId,
-          sql`(select ${sessions.id} from ${sessions} where ${sessions.expiresAt} <= ${now})`,
-        ),
+    // Its own try: a failure here must not stop the sweep below.
+    try {
+      await deleteOwnedBy(
+        deps.db,
+        sql`(select 'demo:' || ${sessions.id} from ${sessions} where ${sessions.expiresAt} <= ${now})`,
       );
-    await deps.db.delete(sessions).where(expired);
+      await deps.db
+        .delete(schema.demoEvents)
+        .where(
+          inArray(
+            schema.demoEvents.sessionId,
+            sql`(select ${sessions.id} from ${sessions} where ${sessions.expiresAt} <= ${now})`,
+          ),
+        );
+      await deps.db.delete(sessions).where(expired);
+    } catch (err) {
+      console.error("demo cleanup failed", { err });
+      removed = 0;
+    }
   }
 
   try {
     await deleteOwnedBy(
       deps.db,
-      sql`(select ${workspaces.id} from ${workspaces} where ${workspaces.id} like 'demo:%' and ${workspaces.installedAt} <= ${now - DEMO_ORPHAN_GRACE_MS} and ${workspaces.id} not in (select 'demo:' || ${sessions.id} from ${sessions}))`,
+      sql`(select ${workspaces.id} from ${workspaces} where substr(${workspaces.id}, 1, 5) = 'demo:' and ${workspaces.installedAt} <= ${now - DEMO_ORPHAN_GRACE_MS} and ${workspaces.id} not in (select 'demo:' || ${sessions.id} from ${sessions}))`,
     );
     // Events are only ever written for a session that exists, so an event without one is safe to delete.
     await deps.db

@@ -176,6 +176,19 @@ describe("/demo", () => {
     expect(await deps.db.select().from(schema.demoSessions)).toHaveLength(1);
   });
 
+  it("checks the rate limit before the content type: a refused address gets 429, not 415", async () => {
+    const deps = testDeps({ demoLimiter: { limit: async () => ({ success: false }) } });
+    const res = await createApp(deps).request("/demo/sessions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "cf-connecting-ip": "203.0.113.9",
+      },
+      body: "a=b",
+    });
+    expect(res.status).toBe(429);
+  });
+
   it("lets visitors through when the limiter itself fails", async () => {
     const deps = testDeps({
       demoLimiter: {

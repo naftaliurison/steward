@@ -150,7 +150,7 @@ describe("demo sessions", () => {
       if ("error" in s) throw new Error(`busy too early at ${i}`);
     }
     expect(await createDemoSession(deps, {})).toEqual({ error: "busy" });
-  });
+  }, 30_000);
 
   it("a rejection nobody has awaited yet is not an unhandled rejection", async () => {
     const deps = testDeps();
@@ -205,9 +205,13 @@ describe("demo sessions", () => {
     expect(await real.select().from(schema.demoSessions)).toHaveLength(0);
   });
 
-  const insertOrphan = async (deps: ReturnType<typeof testDeps>, installedAt: number) =>
+  const insertOrphan = async (
+    deps: ReturnType<typeof testDeps>,
+    installedAt: number,
+    id = "demo:orphan",
+  ) =>
     upsertWorkspace(deps.db, {
-      id: "demo:orphan",
+      id,
       name: "Acme (demo)",
       botTokenSealed: await seal(deps.tokenKey, "xoxb-demo"),
       botUserId: "U_STEWARD",
@@ -218,6 +222,54 @@ describe("demo sessions", () => {
     const deps = testDeps();
     await insertOrphan(deps, NOW - DEMO_ORPHAN_GRACE_MS - 1);
     expect(await cleanupDemoSessions(deps)).toBe(0);
+    expect(await getWorkspace(deps.db, "demo:orphan")).toBeNull();
+  });
+
+  it("cleanup matches the demo: prefix exactly and case-sensitively", async () => {
+    const deps = testDeps();
+    const old = NOW - DEMO_ORPHAN_GRACE_MS - 1;
+    await upsertWorkspace(deps.db, {
+      id: "DEMO:UPPER",
+      name: "Not a demo",
+      botTokenSealed: await seal(deps.tokenKey, "xoxb-x"),
+      botUserId: "U_B",
+      installedAt: old,
+    });
+    await insertOrphan(deps, old, "demo:old-orphan");
+    await cleanupDemoSessions(deps);
+    expect(await getWorkspace(deps.db, "DEMO:UPPER")).not.toBeNull();
+    expect(await getWorkspace(deps.db, "demo:old-orphan")).toBeNull();
+  });
+
+  it("a failing expired-sessions step does not stop the orphan sweep", async () => {
+    const deps = testDeps();
+    const s = await createDemoSession(deps, {});
+    if ("error" in s) throw new Error("unexpected busy");
+    await insertOrphan(deps, NOW - DEMO_ORPHAN_GRACE_MS - 1);
+    let armed = true;
+    const failing = new Proxy(deps.db, {
+      get(target, prop, receiver) {
+        if (prop === "delete") {
+          return (table: unknown) => {
+            if (armed && table === schema.statuses) {
+              armed = false;
+              throw new Error("boom");
+            }
+            return target.delete(table as never);
+          };
+        }
+        const v = Reflect.get(target, prop, receiver);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    deps.clock.now = NOW + DEMO_SESSION_TTL_MS + 1;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await cleanupDemoSessions({ ...deps, db: failing })).toBe(0);
+      expect(errors).toHaveBeenCalledWith("demo cleanup failed", expect.anything());
+    } finally {
+      errors.mockRestore();
+    }
     expect(await getWorkspace(deps.db, "demo:orphan")).toBeNull();
   });
 

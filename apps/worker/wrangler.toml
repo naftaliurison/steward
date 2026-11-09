@@ -33,4 +33,4 @@ enabled = true
 [assets]
 directory = "../web/dist"
 not_found_handling = "single-page-application"
-run_worker_first = ["/slack/*", "/oauth/*", "/demo/*", "/health"]
+run_worker_first = ["/slack/*", "/oauth/*", "/demo/*", "/health", "/health/"]
