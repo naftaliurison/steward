@@ -3371,7 +3371,7 @@ What was built differs from the tasks above in these ways. Each came from a revi
 - **The product page offers no install.** "Add to Slack", `ProductPage` and the `slack` field on `/health` were built as planned and then removed: the Slack app is not publicly distributed, so the button would fail for visitors, and opening installs to the public is the owner's decision. `Product` takes no props and `/health` answers `{ "ok": true }` as before.
 - **Page copy changed to be true of the code:** the demo is described as running on this site and kept for up to an hour (not "in your browser"), and the status line says it applies once the person has connected Steward to their Slack account.
 - **Outside the plan's file list:** the README introduction no longer states planned features in the present tense; the expired-install sentence in `routes/oauth.ts` no longer points at a product-page link.
-- **Counts.** 222 tests at the end of this plan (127 at its start); 16 commits after the plan commit, eight of them fixes.
+- **Counts.** 222 tests at the end of this plan (127 at its start); 14 commits after the plan commit, six of them fixes.
 
 **Verified in a real browser** against a local Worker with the demo enabled: asset routing (API paths reach the Worker, other paths get the page), the whole `/ooo` flow, Undo in place, the five-minute refusal after advancing the clock, a refused command, a reload, 375 px width, light and dark mode.
 
