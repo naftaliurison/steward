@@ -27,8 +27,17 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<u
   }
 }
 
-const responseUrlFor = (session: Pick<DemoSession, "id">) =>
-  `https://hooks.slack.com/demo/${session.id}`;
+const MESSAGE_TS = /^\d{1,10}$/;
+
+/**
+ * Where a receipt goes. A button press names the message it lives on (Slack's
+ * `container.message_ts`), so a receipt that replaces the original can say which one.
+ */
+function responseUrlFor(session: Pick<DemoSession, "id">, body?: Record<string, unknown>): string {
+  const base = `https://hooks.slack.com/demo/${session.id}`;
+  const ts = body && isObject(body.container) ? body.container.message_ts : undefined;
+  return typeof ts === "string" && MESSAGE_TS.test(ts) ? `${base}/${ts}` : base;
+}
 
 /** True when the body has the parts the handler reads for its type; other types pass through. */
 function isInteractionShaped(body: Record<string, unknown>): boolean {
@@ -54,7 +63,7 @@ export function demoInteractionPayload(
   session: Pick<DemoSession, "id" | "workspaceId">,
   you: { slackUserId: string; displayName: string } | null | undefined,
 ): Record<string, unknown> {
-  const url = responseUrlFor(session);
+  const url = responseUrlFor(session, body);
   const payload: Record<string, unknown> = {
     ...body,
     team: { id: session.workspaceId },

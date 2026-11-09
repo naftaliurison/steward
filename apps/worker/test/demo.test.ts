@@ -373,4 +373,15 @@ describe("demoInteractionPayload", () => {
       response_url: "https://hooks.slack.com/demo/S1",
     });
   });
+
+  it("gives a button press its own response URL, named after the message it lives on", () => {
+    const base = `https://hooks.slack.com/demo/${session.id}`;
+    const url = (container: unknown) =>
+      demoInteractionPayload({ type: "block_actions", container }, session, null).response_url;
+    expect(url({ type: "message", message_ts: "3" })).toBe(`${base}/3`);
+    expect(url({ type: "message", message_ts: "3/../../evil" })).toBe(base);
+    expect(url({ type: "message", message_ts: "12345678901" })).toBe(base);
+    expect(url({ type: "message", message_ts: 3 })).toBe(base);
+    expect(url(undefined)).toBe(base);
+  });
 });
