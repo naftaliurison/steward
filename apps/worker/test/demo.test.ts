@@ -1,9 +1,13 @@
 import { STATUS_MODAL_CALLBACK, todayIn, UNDO_ACTION } from "@steward/availability";
 import { schema } from "@steward/core";
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app";
-import { DEMO_MAX_EVENTS } from "../src/demo/session";
+import {
+  DEMO_MAX_ACTIONS,
+  DEMO_MAX_LIVE_SESSIONS,
+  DEMO_MAX_SESSIONS_PER_DAY,
+} from "../src/demo/session";
 import { demoInteractionPayload } from "../src/routes/demo";
 import { NOW, testDeps } from "./helpers";
 
@@ -200,6 +204,79 @@ describe("/demo", () => {
     expect((await post(createApp(deps), "/demo/sessions", {})).status).toBe(201);
   });
 
+  it("turns everyone away with its own sentence when all demo traffic together is too much", async () => {
+    const keys: string[] = [];
+    const deps = testDeps({
+      demoGlobalLimiter: {
+        limit: async ({ key }) => {
+          keys.push(key);
+          return { success: false };
+        },
+      },
+    });
+    const res = await post(createApp(deps), "/demo/sessions", {});
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error: "The demo is busy right now. Try again in a minute.",
+    });
+    expect(keys).toEqual(["all"]);
+    expect(await deps.db.select().from(schema.demoSessions)).toHaveLength(0);
+  });
+
+  it("lets visitors through when the global limiter itself fails", async () => {
+    const deps = testDeps({
+      demoGlobalLimiter: {
+        limit: async () => {
+          throw new Error("limiter down");
+        },
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await post(createApp(deps), "/demo/sessions", {})).status).toBe(201);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("the per-visitor refusal wins when both limiters would refuse, and the global one is not asked", async () => {
+    let asked = false;
+    const deps = testDeps({
+      demoLimiter: { limit: async () => ({ success: false }) },
+      demoGlobalLimiter: {
+        limit: async () => {
+          asked = true;
+          return { success: false };
+        },
+      },
+    });
+    const res = await post(createApp(deps), "/demo/sessions", {});
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "Slow down a little, then try again." });
+    expect(asked).toBe(false);
+  });
+
+  it("answers a full demo and a spent day with different sentences", async () => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    const day = new Date(NOW).toISOString().slice(0, 10);
+    await deps.db.insert(schema.demoDays).values({ day, sessions: DEMO_MAX_SESSIONS_PER_DAY });
+    const closed = await post(app, "/demo/sessions", {});
+    expect(closed.status).toBe(429);
+    expect(await closed.json()).toEqual({
+      error: "The demo has had all its visitors for today. It opens again at midnight UTC.",
+    });
+    deps.clock.now = NOW + 24 * 60 * 60 * 1000;
+    for (let i = 0; i < DEMO_MAX_LIVE_SESSIONS; i++) {
+      expect((await post(app, "/demo/sessions", {})).status).toBe(201);
+    }
+    const full = await post(app, "/demo/sessions", {});
+    expect(full.status).toBe(429);
+    expect(await full.json()).toEqual({
+      error: "The demo is full right now. Try again in a few minutes.",
+    });
+  }, 30_000);
+
   it("rejects bad input plainly", async () => {
     const deps = testDeps();
     const app = createApp(deps);
@@ -299,19 +376,20 @@ describe("/demo", () => {
     expect(new Set(ids).size).toBe(2);
   });
 
-  it("refuses minutes outside 0 to 1440 and accepts the edges", async () => {
+  it("takes whole minutes from 1 to 1440 and refuses everything else", async () => {
     const deps = testDeps();
     const app = createApp(deps);
     const s = (await (await post(app, "/demo/sessions", {})).json()) as Created;
-    const msg = { error: "Send { minutes: number } between 0 and 1440." };
-    for (const minutes of [-5, 1441]) {
+    const msg = { error: "Send { minutes: a whole number from 1 to 1440 }." };
+    for (const minutes of [0, 0.5, -5, 1441, "5", null, Number.NaN]) {
       const res = await post(app, `/demo/${s.id}/advance`, { minutes });
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual(msg);
     }
-    const zero = await post(app, `/demo/${s.id}/advance`, { minutes: 0 });
-    expect(zero.status).toBe(200);
-    expect(((await zero.json()) as State).now).toBe(NOW);
+    expect((await post(app, `/demo/${s.id}/advance`, {})).status).toBe(400);
+    const one = await post(app, `/demo/${s.id}/advance`, { minutes: 1 });
+    expect(one.status).toBe(200);
+    expect(((await one.json()) as State).now).toBe(NOW + 60 * 1000);
     const edge = await post(app, `/demo/${s.id}/advance`, { minutes: 1440 });
     expect(edge.status).toBe(200);
     expect(((await edge.json()) as State).now).toBe(NOW + 24 * 60 * 60 * 1000);
@@ -326,21 +404,52 @@ describe("/demo", () => {
     }
   });
 
-  it("stops a session that has done all it can, with a sentence that says so", async () => {
+  const SPENT = { error: "This demo session has done all it can. Start over to continue." };
+
+  it("gives a session exactly its budget of actions when requests race", async () => {
     const app = createApp(testDeps());
     const { id } = (await (await post(app, "/demo/sessions", {})).json()) as Created;
-    for (let i = 0; i < DEMO_MAX_EVENTS; i++) {
-      expect((await post(app, `/demo/${id}/command`, { text: "/ooo" })).status).toBe(200);
+    const answers = await Promise.all(
+      Array.from({ length: DEMO_MAX_ACTIONS + 10 }, () =>
+        post(app, `/demo/${id}/command`, { text: "/ooo" }),
+      ),
+    );
+    expect(answers.filter((r) => r.status === 200)).toHaveLength(DEMO_MAX_ACTIONS);
+    const refused = answers.filter((r) => r.status === 409);
+    expect(refused).toHaveLength(10);
+    for (const r of refused) expect(await r.json()).toEqual(SPENT);
+    expect((await getState(app, id)).events).toHaveLength(DEMO_MAX_ACTIONS);
+  });
+
+  it("a spent session refuses interact and advance too, and still shows its state", async () => {
+    const app = createApp(testDeps());
+    const { id } = (await (await post(app, "/demo/sessions", {})).json()) as Created;
+    for (let i = 0; i < DEMO_MAX_ACTIONS; i++) {
+      expect((await post(app, `/demo/${id}/advance`, { minutes: 1 })).status).toBe(200);
     }
-    const spent = { error: "This demo session has done all it can. Start over to continue." };
-    const command = await post(app, `/demo/${id}/command`, { text: "/ooo" });
-    expect(command.status).toBe(409);
-    expect(await command.json()).toEqual(spent);
     const today = todayIn("UTC", NOW);
     const interact = await post(app, `/demo/${id}/interact`, submission(today, today));
     expect(interact.status).toBe(409);
-    expect(await interact.json()).toEqual(spent);
-    expect((await getState(app, id)).events).toHaveLength(DEMO_MAX_EVENTS);
+    expect(await interact.json()).toEqual(SPENT);
+    const advance = await post(app, `/demo/${id}/advance`, { minutes: 1 });
+    expect(advance.status).toBe(409);
+    expect(await advance.json()).toEqual(SPENT);
+    const command = await post(app, `/demo/${id}/command`, { text: "/ooo" });
+    expect(command.status).toBe(409);
+    const state = await app.request(`/demo/${id}/state`);
+    expect(state.status).toBe(200);
+    expect(((await state.json()) as State).now).toBe(NOW + DEMO_MAX_ACTIONS * 60 * 1000);
+  });
+
+  it("does not spend an action on a request it refuses for its shape", async () => {
+    const app = createApp(testDeps());
+    const { id } = (await (await post(app, "/demo/sessions", {})).json()) as Created;
+    for (let i = 0; i < DEMO_MAX_ACTIONS + 5; i++) {
+      await post(app, `/demo/${id}/command`, { text: "/other" });
+      await post(app, `/demo/${id}/interact`, { type: "block_actions" });
+      await post(app, `/demo/${id}/advance`, { minutes: 0 });
+    }
+    expect((await post(app, `/demo/${id}/command`, { text: "/ooo" })).status).toBe(200);
   });
 
   it("says so when the clock cannot go further", async () => {

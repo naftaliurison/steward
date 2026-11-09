@@ -14,4 +14,6 @@ export type Env = {
   DEMO_ENABLED?: string;
   /** Per-visitor rate limit for /demo/* (the `[[ratelimits]]` binding in wrangler.toml). */
   DEMO_LIMITER?: DemoLimiter;
+  /** All demo traffic together (the second `[[ratelimits]]` binding in wrangler.toml). */
+  DEMO_GLOBAL_LIMITER?: DemoLimiter;
 };

@@ -17,13 +17,14 @@ import { DEMO_USER_TOKEN_PREFIX, DemoSlackClient } from "./slackClient";
 export const DEMO_SESSION_TTL_MS = 60 * 60 * 1000;
 /**
  * The demo's write budget. D1's free tier allows 100,000 row writes a day, shared with real
- * workspaces. A save-and-undo cycle records 5 events and writes about 20 rows, so a session capped
- * at 40 events writes about 200 rows with its seed and cleanup, and 150 sessions a day keep the
- * demo near 30,000 writes: under a third of the allowance.
+ * workspaces, and it bills every index entry and every delete as a row. Measured that way a
+ * session costs about 80 billed rows to seed and clean up and about 25 per save, so a session
+ * that spends all 24 actions on saves bills about 700 rows, and 60 sessions a day keep the demo
+ * under 45,000: less than half the allowance in the worst case.
  */
-export const DEMO_MAX_LIVE_SESSIONS = 50;
-export const DEMO_MAX_SESSIONS_PER_DAY = 150;
-export const DEMO_MAX_EVENTS = 40;
+export const DEMO_MAX_LIVE_SESSIONS = 20;
+export const DEMO_MAX_SESSIONS_PER_DAY = 60;
+export const DEMO_MAX_ACTIONS = 24;
 export const DEMO_MAX_ADVANCE_MS = 24 * 60 * 60 * 1000;
 /** A session-less demo workspace younger than this may still be mid-create; the sweep leaves it be. */
 export const DEMO_ORPHAN_GRACE_MS = 5 * 60 * 1000;
@@ -73,13 +74,13 @@ async function claimDailySlot(db: Db, now: number): Promise<boolean> {
 export async function createDemoSession(
   deps: Deps,
   opts: { visitorTz?: string },
-): Promise<DemoSession | { error: "busy" }> {
+): Promise<DemoSession | { error: "full" | "closed" }> {
   const now = deps.now();
-  if ((await liveSessionCount(deps.db, now)) >= DEMO_MAX_LIVE_SESSIONS) return { error: "busy" };
+  if ((await liveSessionCount(deps.db, now)) >= DEMO_MAX_LIVE_SESSIONS) return { error: "full" };
   // The live cap above is a soft check: creates racing each other can overshoot it by a few.
   // The day's budget is exact.
   // A seed that throws after this point keeps its slot for the day: the budget fails closed.
-  if (!(await claimDailySlot(deps.db, now))) return { error: "busy" };
+  if (!(await claimDailySlot(deps.db, now))) return { error: "closed" };
   const id = newId();
   try {
     const workspaceId = demoWorkspaceId(id);
@@ -113,6 +114,7 @@ export async function createDemoSession(
       expiresAt: now + DEMO_SESSION_TTL_MS,
       clockOffsetMs: 0,
       youPersonId,
+      actionsUsed: 0,
     };
     await deps.db.insert(schema.demoSessions).values(row);
     return withWorkspace(row);
@@ -139,6 +141,20 @@ export async function getDemoSession(
     .where(and(eq(schema.demoSessions.id, id), gt(schema.demoSessions.expiresAt, deps.now())));
   const row = rows[0];
   return row ? withWorkspace(row) : null;
+}
+
+/** Takes one of the session's actions. One statement, so requests racing each other cannot overshoot. False when the session has none left. */
+export async function claimDemoAction(
+  deps: Pick<Deps, "db">,
+  session: DemoSession,
+): Promise<boolean> {
+  const used = schema.demoSessions.actionsUsed;
+  const rows = await deps.db
+    .update(schema.demoSessions)
+    .set({ actionsUsed: sql`${used} + 1` })
+    .where(and(eq(schema.demoSessions.id, session.id), lt(used, DEMO_MAX_ACTIONS)))
+    .returning({ actionsUsed: used });
+  return rows.length > 0;
 }
 
 /**

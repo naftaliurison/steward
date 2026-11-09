@@ -62,7 +62,7 @@ export function Emulator(props: { api: DemoApi; store: Store; tz: string }) {
       <Centered>
         <p role="alert">
           {demo.phase === "busy"
-            ? "The demo is busy right now. Try again in a few minutes."
+            ? (demo.failure ?? "The demo is busy right now. Try again in a few minutes.")
             : (demo.failure ?? "The demo couldn't start. Check your connection and try again.")}
         </p>
         <button type="button" className={`${PANEL_BUTTON} mt-4`} onClick={() => void demo.retry()}>

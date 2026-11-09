@@ -17,6 +17,8 @@ export type Deps = {
   demoEnabled: boolean;
   /** Per-visitor rate limit for /demo/*. Absent when the binding is not configured. */
   demoLimiter?: DemoLimiter;
+  /** All demo traffic together. Absent when the binding is not configured. */
+  demoGlobalLimiter?: DemoLimiter;
   /** Run this after the response is sent (Slack wants an answer within 3 seconds). */
   defer: (work: Promise<unknown>) => void;
 };
@@ -41,6 +43,7 @@ export function depsFromEnv(env: Env, ctx: ExecutionContext): Deps {
     appUrl: env.APP_URL,
     demoEnabled: env.DEMO_ENABLED === "1",
     demoLimiter: env.DEMO_LIMITER,
+    demoGlobalLimiter: env.DEMO_GLOBAL_LIMITER,
     defer: (work) => ctx.waitUntil(work),
   };
 }

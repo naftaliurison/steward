@@ -6,7 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createD1Db } from "../src/db";
 import {
   advanceDemoClock,
+  claimDemoAction,
   createDemoSession,
+  DEMO_MAX_ACTIONS,
   DEMO_SESSION_TTL_MS,
   demoWorkspaceId,
 } from "../src/demo/session";
@@ -161,5 +163,19 @@ describe("the demo on the real D1 driver (Miniflare)", () => {
     expect((await deps.db.select().from(schema.demoDays)).map((d) => d.day)).not.toContain(
       "2026-01-01",
     );
+  }, 60_000);
+
+  it("gives a session exactly its budget of actions when claims race", async () => {
+    const session = await createDemoSession(deps, {});
+    if ("error" in session) throw new Error("unexpected refusal");
+    const claims = await Promise.all(
+      Array.from({ length: DEMO_MAX_ACTIONS + 10 }, () => claimDemoAction(deps, session)),
+    );
+    expect(claims.filter(Boolean)).toHaveLength(DEMO_MAX_ACTIONS);
+    const [row] = await deps.db
+      .select()
+      .from(schema.demoSessions)
+      .where(eq(schema.demoSessions.id, session.id));
+    expect(row?.actionsUsed).toBe(DEMO_MAX_ACTIONS);
   }, 60_000);
 });

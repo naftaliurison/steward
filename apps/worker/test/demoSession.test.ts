@@ -122,7 +122,7 @@ describe("demo sessions", () => {
       .update(schema.demoDays)
       .set({ sessions: DEMO_MAX_SESSIONS_PER_DAY })
       .where(eq(schema.demoDays.day, day));
-    expect(await createDemoSession(deps, {})).toEqual({ error: "busy" });
+    expect(await createDemoSession(deps, {})).toEqual({ error: "closed" });
     expect((await today())[0]?.sessions).toBe(DEMO_MAX_SESSIONS_PER_DAY); // a refusal spends nothing
 
     deps.clock.now = NOW + 24 * 60 * 60 * 1000; // tomorrow has its own budget
@@ -149,7 +149,7 @@ describe("demo sessions", () => {
       const s = await createDemoSession(deps, {});
       if ("error" in s) throw new Error(`busy too early at ${i}`);
     }
-    expect(await createDemoSession(deps, {})).toEqual({ error: "busy" });
+    expect(await createDemoSession(deps, {})).toEqual({ error: "full" });
   }, 30_000);
 
   it("a rejection nobody has awaited yet is not an unhandled rejection", async () => {
