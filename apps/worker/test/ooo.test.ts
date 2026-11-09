@@ -51,7 +51,12 @@ describe("/ooo", () => {
 
   it("answers health", async () => {
     const res = await app.request("/health");
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, slack: true });
+  });
+
+  it("says Slack install is not configured when a secret is missing", async () => {
+    const bare = createApp(testDeps({ slackClientId: "" }));
+    expect(await (await bare.request("/health")).json()).toEqual({ ok: true, slack: false });
   });
 
   it("opens the status form with the response_url tucked in", async () => {
