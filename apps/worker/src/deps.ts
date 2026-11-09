@@ -1,6 +1,6 @@
 import { type Db, RealSlackClient, type SlackClient } from "@steward/core";
 import { createD1Db } from "./db";
-import type { Env } from "./env";
+import type { DemoLimiter, Env } from "./env";
 
 /** Everything the app needs, built once per request in production and by hand in tests. */
 export type Deps = {
@@ -15,6 +15,8 @@ export type Deps = {
   appUrl: string;
   /** Whether /demo/* serves visitors. */
   demoEnabled: boolean;
+  /** Per-visitor rate limit for /demo/*. Absent when the binding is not configured. */
+  demoLimiter?: DemoLimiter;
   /** Run this after the response is sent (Slack wants an answer within 3 seconds). */
   defer: (work: Promise<unknown>) => void;
 };
@@ -38,6 +40,7 @@ export function depsFromEnv(env: Env, ctx: ExecutionContext): Deps {
     slackClientSecret: env.SLACK_CLIENT_SECRET,
     appUrl: env.APP_URL,
     demoEnabled: env.DEMO_ENABLED === "1",
+    demoLimiter: env.DEMO_LIMITER,
     defer: (work) => ctx.waitUntil(work),
   };
 }

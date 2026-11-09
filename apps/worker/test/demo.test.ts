@@ -74,7 +74,7 @@ describe("/demo", () => {
     state = await getState(app, s.id);
     expect(state.events.map((e) => e.kind)).toEqual(["view", "status", "response"]);
     expect(state.events[1]?.payload).toMatchObject({
-      userToken: "xoxp-demo-U_DANA",
+      slackUserId: "U_DANA",
       status: { text: "Out of office" },
     });
     const receipt = state.events[2]?.payload as {
@@ -107,6 +107,7 @@ describe("/demo", () => {
     expect((state.events[4]?.payload as { responseUrl: string } | undefined)?.responseUrl).toBe(
       `https://hooks.slack.com/demo/${s.id}`,
     );
+    expect(JSON.stringify(state)).not.toContain("xoxp");
   });
 
   it("advances time so the undo window closes, and a gone session is a 404", async () => {
@@ -135,6 +136,55 @@ describe("/demo", () => {
     deps.clock.now = NOW + 61 * 60 * 1000;
     expect((await app.request(`/demo/${s.id}/state`)).status).toBe(404);
     expect((await post(app, `/demo/${s.id}/command`, { text: "/ooo" })).status).toBe(404);
+  });
+
+  it("accepts JSON only", async () => {
+    const app = createApp(testDeps());
+    const form = await app.request("/demo/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "tz=UTC",
+    });
+    expect(form.status).toBe(415);
+    expect(await form.json()).toEqual({ error: "Send JSON." });
+    const untyped = await app.request("/demo/sessions", { method: "POST", body: "{}" });
+    expect(untyped.status).toBe(415);
+  });
+
+  it("turns away a visitor who is sending requests too fast, and nobody else", async () => {
+    const seen: string[] = [];
+    const deps = testDeps({
+      demoLimiter: {
+        limit: async ({ key }) => {
+          seen.push(key);
+          return { success: key !== "203.0.113.9" };
+        },
+      },
+    });
+    const app = createApp(deps);
+    const from = (ip: string) =>
+      app.request("/demo/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+        body: "{}",
+      });
+    const refused = await from("203.0.113.9");
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toEqual({ error: "Slow down a little, then try again." });
+    expect((await from("198.51.100.7")).status).toBe(201);
+    expect(seen).toEqual(["203.0.113.9", "198.51.100.7"]);
+    expect(await deps.db.select().from(schema.demoSessions)).toHaveLength(1);
+  });
+
+  it("lets visitors through when the limiter itself fails", async () => {
+    const deps = testDeps({
+      demoLimiter: {
+        limit: async () => {
+          throw new Error("limiter down");
+        },
+      },
+    });
+    expect((await post(createApp(deps), "/demo/sessions", {})).status).toBe(201);
   });
 
   it("rejects bad input plainly", async () => {

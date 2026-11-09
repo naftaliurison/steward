@@ -16,3 +16,10 @@ crons = ["* * * * *"]
 # APP_URL and SLACK_CLIENT_ID are not set here on purpose: a `[vars]` table would overwrite
 # production values on every deploy. Locally they come from .dev.vars (see .dev.vars.example);
 # in production set them once with `wrangler secret put APP_URL` and `wrangler secret put SLACK_CLIENT_ID`.
+
+# Per-visitor rate limit for the public demo: 60 requests a minute from one address, counted per
+# Cloudflare location.
+[[ratelimits]]
+name = "DEMO_LIMITER"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }

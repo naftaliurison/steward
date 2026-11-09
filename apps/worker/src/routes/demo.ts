@@ -97,6 +97,31 @@ async function isSpent(deps: Deps, session: DemoSession): Promise<boolean> {
 export function demoRoutes(deps: Deps) {
   const r = new Hono<Vars>();
 
+  // One visitor may not hammer the demo. The key is the address Cloudflare saw the request come from.
+  // A limiter that fails lets the request through: the write budget is the hard limit, this is the polite one.
+  r.use("*", async (c, next) => {
+    if (deps.demoLimiter) {
+      const key = c.req.header("cf-connecting-ip") ?? "unknown";
+      let allowed = true;
+      try {
+        allowed = (await deps.demoLimiter.limit({ key })).success;
+      } catch (err) {
+        console.error("demo rate limiter failed", { err });
+      }
+      if (!allowed) return c.json({ error: "Slow down a little, then try again." }, 429);
+    }
+    await next();
+  });
+
+  // A page on another site can make a visitor's browser send form-typed POSTs without asking first.
+  // The demo takes JSON only, which a browser will not send cross-site without permission.
+  r.use("*", async (c, next) => {
+    const type = (c.req.header("content-type") ?? "").toLowerCase();
+    if (c.req.method === "POST" && !type.startsWith("application/json"))
+      return c.json({ error: "Send JSON." }, 415);
+    await next();
+  });
+
   // A visitor can post anything; none of it may be large.
   r.use(
     "*",

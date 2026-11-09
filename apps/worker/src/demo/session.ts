@@ -12,7 +12,7 @@ import {
 import { and, count, eq, gt, inArray, like, lt, lte, notInArray, sql } from "drizzle-orm";
 import type { Deps } from "../deps";
 import { isKnownTimeZone } from "../people";
-import { DemoSlackClient } from "./slackClient";
+import { DEMO_USER_TOKEN_PREFIX, DemoSlackClient } from "./slackClient";
 
 export const DEMO_SESSION_TTL_MS = 60 * 60 * 1000;
 /**
@@ -100,7 +100,7 @@ export async function createDemoSession(
       await setPersonUserToken(
         deps.db,
         person.id,
-        await seal(deps.tokenKey, `xoxp-demo-${p.slackUserId}`),
+        await seal(deps.tokenKey, `${DEMO_USER_TOKEN_PREFIX}${p.slackUserId}`),
       );
       if (i === 0) youPersonId = person.id;
     }
