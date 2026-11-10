@@ -4,7 +4,7 @@ An AI colleague for Slack that acts in your work tools only on your yes, and sho
 
 Steward is one core — the Slack surface, connections to other tools, an act-with-receipt engine with Undo, scheduling, budgets, audit and evaluation — and products built on it.
 
-**Steward Availability** is the first, and it is being built: you will say once, in plain words, that you're out, travelling or working remotely, and it will set your Slack status, your Google calendars and your Gmail auto-reply — reviewable before it saves, reversible for five minutes after — and find a time for a group and book it with an agenda. Only the Slack status works today.
+**Steward Availability** is the first, and it is being built: you will say once, in plain words, that you're out, travelling or working remotely, and it will set your Slack status, your Google calendars and your Gmail auto-reply — reviewable before it saves, reversible for five minutes after — and find a time for a group and book it with an agenda. Today it sets the Slack status, at once or from a first day in the future.
 
 Status: `/ooo` form → Slack status → receipt → Undo works end to end in Slack, and the same flow runs as a browser demo at `/try` against a pretend Slack. See Deploy below to run your own copy. The design is in [`docs/superpowers/specs/2026-11-08-steward-availability-design.md`](docs/superpowers/specs/2026-11-08-steward-availability-design.md); plans live in `docs/superpowers/plans/`.
 
@@ -33,6 +33,8 @@ Everything below is done once by the account owner; CI deploys on every later pu
 5. **Secrets.** From `apps/worker`, one at a time: `pnpm exec wrangler secret put SLACK_SIGNING_SECRET`, `pnpm exec wrangler secret put SLACK_CLIENT_ID`, `pnpm exec wrangler secret put SLACK_CLIENT_SECRET`, `pnpm exec wrangler secret put TOKEN_KEY` (32 random bytes, base64: `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`), `pnpm exec wrangler secret put APP_URL` (`https://<host>` from step 3, no trailing slash). Secrets take effect without a redeploy. Set `DEMO_ENABLED` to `1` (`pnpm exec wrangler secret put DEMO_ENABLED`) to switch the public demo at `/try` on; without it `/demo/*` answers 503.
 6. **Install.** Visit `https://<host>/oauth/slack/install`, approve, then type `/ooo` in Slack.
 7. **CI.** Add the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; from then on every push to `main` applies migrations and deploys after the checks pass.
+
+**After a change that adds a migration** (a new file in `packages/core/drizzle/`): CI applies it before it deploys. When you deploy by hand, run `pnpm --filter @steward/worker db:migrate:remote` first, then deploy; the new code expects the new columns.
 
 If something goes wrong:
 

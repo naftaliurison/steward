@@ -204,7 +204,8 @@ export function Emulator(props: { api: DemoApi; store: Store; tz: string }) {
             ))}
           </div>
           <p className="mt-2 text-sm text-neutral-500">
-            Move time forward to watch the undo window close and the status expire.
+            Move time forward to watch the undo window close, a scheduled status start, and a status
+            expire.
           </p>
         </section>
         <section>

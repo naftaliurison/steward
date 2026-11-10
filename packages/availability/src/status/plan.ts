@@ -3,7 +3,7 @@ import type { StatusInput } from "./types";
 
 export const SLACK_STATUS = "slack-status";
 
-/** Which systems get written for a status. Slack always; Calendar and Gmail arrive in Plan 3. */
+/** Which systems get written for a status. Slack always; Calendar and Gmail are added as further specs here. */
 export function planWrites(
   input: StatusInput,
   times: { startMs: number; endMs: number },

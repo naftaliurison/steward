@@ -9,11 +9,13 @@ const WORKS_TODAY = [
   "Type /ooo in Slack and a short form opens: what is happening, and until which day.",
   "Once you have connected Steward to your Slack account, Save sets your Slack status until your last day ends, in your own time zone.",
   "A receipt lists each change Steward made, with an Undo button that works for five minutes.",
+  "Pick a first day in the future and Steward sets the status when that day begins. Until then you can cancel it.",
+  "If Slack refuses a change, Steward tries again for about half an hour, then tells you.",
   "No status is set until you press Save, and every write is recorded.",
 ];
 const COMING_NEXT = [
   "Google Calendar out-of-office and the Gmail auto-reply, set and undone together with the status.",
-  "Dates in the future, and requests in plain words.",
+  "Requests in plain words.",
   "A team view of who is away.",
   "Finding a time for a group and booking it with an agenda.",
 ];
