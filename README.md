@@ -62,6 +62,7 @@ What to know:
 - Steward writes to the main calendar only. Gmail has one auto-reply per account: if one is already on and is not Steward's, Steward leaves it alone and says so.
 - The connect link names the Slack person it belongs to. It is tied to that person, not to the browser that opens it, so do not pass your link to anyone else.
 - Steward stores the Google tokens sealed with `TOKEN_KEY`. `/ooo google disconnect` deletes them and asks Google to revoke them. Events and auto-replies Steward already set stay as they are.
+- Saving a new status over an "Out of office" or "Sick" one that has not finished leaves that one's calendar event and auto-reply in place. Steward only marks the old status as ended. Undo it first (within five minutes) or remove them by hand.
 
 ## Licence
 
