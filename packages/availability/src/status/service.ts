@@ -88,6 +88,9 @@ export async function saveStatus(
   const startMs = zonedTimeToEpochMs(input.from, "00:00", person.tz);
   const endMs = zonedTimeToEpochMs(nextDay(input.to), "00:00", person.tz);
   const previous = await activeStatusFor(deps.db, person.id);
+  // Read before anything is written, so a failed read cannot leave a status without targets.
+  const wantsGoogle = GOOGLE_TYPES.includes(input.type);
+  const google = wantsGoogle ? await getGoogleConnection(deps.db, person.id) : null;
   const state = startMs <= now ? "active" : "scheduled";
   const status: StatusRow = {
     id: newId(),
@@ -112,8 +115,6 @@ export async function saveStatus(
       .where(eq(schema.statuses.id, previous.id));
   }
   await deps.db.insert(schema.statuses).values(status);
-  const wantsGoogle = GOOGLE_TYPES.includes(input.type);
-  const google = wantsGoogle ? await getGoogleConnection(deps.db, person.id) : null;
   const created = await createTargets(
     deps.db,
     status.id,
@@ -123,9 +124,14 @@ export async function saveStatus(
       (writesAtSave(spec.system) || state === "active" ? now : startMs) + RECOVERY_DELAY_MS,
   );
   const runNow = state === "active" ? created : created.filter((t) => writesAtSave(t.system));
-  await executeTargets(deps.db, deps.registry, ctxFor(person, userToken), runNow, deps.now);
+  const ran =
+    runNow.length === 0
+      ? []
+      : await executeTargets(deps.db, deps.registry, ctxFor(person, userToken), runNow, deps.now);
+  const afterRun = new Map(ran.map((t) => [t.id, t]));
+  const targets = created.map((t) => afterRun.get(t.id) ?? t);
   const notes = wantsGoogle && !google && deps.googleHint ? [GOOGLE_HINT] : [];
-  return { status, targets: await targetsForStatus(deps.db, status.id), notes };
+  return { status, targets, notes };
 }
 
 /** Reverses every write of the person's own status inside the undo window and marks it cancelled. */

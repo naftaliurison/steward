@@ -108,6 +108,22 @@ describe("saveStatus / undoStatus", () => {
     expect(targets[0]?.nextAttemptAt).toBe(status.startMs + RECOVERY_DELAY_MS);
   });
 
+  it("a scheduled remote save returns its one pending target and calls no connector", async () => {
+    const slackStub = new StubConnector("slack-status");
+    const stubDeps = { ...deps, registry: new ConnectorRegistry().register(slackStub) };
+    const { targets } = await saveStatus(
+      stubDeps,
+      dana,
+      { type: "remote", from: "2026-11-20", to: "2026-11-20", text: "Remote", emoji: ":house:" },
+      "xoxp-dana",
+    );
+    expect(targets).toHaveLength(1);
+    expect(targets[0]?.state).toBe("pending");
+    expect(slackStub.performed).toHaveLength(0);
+    const stored = await db.select().from(schema.statusTargets);
+    expect(stored.map((t) => t.id)).toEqual(targets.map((t) => t.id));
+  });
+
   it("a written target has no recovery time left", async () => {
     const { targets } = await saveStatus(
       deps,
@@ -409,6 +425,7 @@ describe("saveStatus / undoStatus", () => {
       expect(gmail.performed).toHaveLength(1);
       expect(by["slack-status"]?.state).toBe("pending");
       expect(by["slack-status"]?.nextAttemptAt).toBe(status.startMs + RECOVERY_DELAY_MS);
+      expect(targets).toHaveLength(3);
       expect(slack.statuses.size).toBe(0);
     });
 
