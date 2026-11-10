@@ -1,9 +1,19 @@
 import { SlackStatusConnector, type StatusInput, saveStatus } from "@steward/availability";
-import { ConnectorRegistry, ensurePerson, type PersonRow, schema } from "@steward/core";
-import { eq } from "drizzle-orm";
+import {
+  ConnectorRegistry,
+  ensurePerson,
+  type PersonRow,
+  schema,
+  seal,
+  setGoogleHealth,
+  setPersonUserToken,
+} from "@steward/core";
+import { seedGoogleConnection } from "@steward/core/testing";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createDemoSession, DEMO_SESSION_TTL_MS, demoWorkspaceId } from "../src/demo/session";
-import { runStatusSteps, runTick } from "../src/tick";
+import { registryFor } from "../src/registry";
+import { retryWeight, runStatusSteps, runTick } from "../src/tick";
 import { NOW, seedWorkspace, type TestDeps, testDeps } from "./helpers";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -415,5 +425,293 @@ describe("tick", () => {
     expect((await statusRow(deps, "S_DEMO_OVER"))?.state).toBe("active");
     expect((await statusRow(deps, "S_DEMO_FAILED"))?.state).toBe("active");
     expect(await targetOf(deps, "S_DEMO_FAILED")).toEqual(before);
+  });
+
+  describe("Google writes", () => {
+    const withGoogle = (deps: TestDeps) => ({
+      db: deps.db,
+      registry: registryFor(deps),
+      now: deps.now,
+    });
+    const connected = async (deps: TestDeps): Promise<PersonRow> => {
+      const person = await seedWorkspace(deps);
+      await seedGoogleConnection(deps.db, deps.tokenKey, {
+        personId: person.id,
+        workspaceId: "T1",
+      });
+      return person;
+    };
+    const countSetVacation = (deps: TestDeps) => {
+      const counter = { calls: 0 };
+      const real = deps.google.setVacation.bind(deps.google);
+      deps.google.setVacation = async (args) => {
+        counter.calls++;
+        return real(args);
+      };
+      return counter;
+    };
+    const targetFor = async (deps: TestDeps, statusId: string, system: string) =>
+      (
+        await deps.db
+          .select()
+          .from(schema.statusTargets)
+          .where(
+            and(
+              eq(schema.statusTargets.statusId, statusId),
+              eq(schema.statusTargets.system, system),
+            ),
+          )
+      )[0];
+    const dueAt = (deps: TestDeps, statusId: string, system: string, at: number) =>
+      deps.db
+        .update(schema.statusTargets)
+        .set({ nextAttemptAt: at })
+        .where(
+          and(eq(schema.statusTargets.statusId, statusId), eq(schema.statusTargets.system, system)),
+        );
+    /** A person with a user token and a Slack write that failed once (status active today). */
+    const slackPerson = async (deps: TestDeps, user: string, at: number): Promise<string> => {
+      const base = await ensurePerson(deps.db, "T1", user, user);
+      const person = await setPersonUserToken(
+        deps.db,
+        base.id,
+        await seal(deps.tokenKey, `xoxp-${user}`),
+      );
+      deps.slack.failNext.setUserStatus = "ratelimited";
+      const saved = await saveStatus(
+        withGoogle(deps),
+        person,
+        out("2026-11-12", "2026-11-13"),
+        `xoxp-${user}`,
+      );
+      await dueAt(deps, saved.status.id, "slack-status", at);
+      return saved.status.id;
+    };
+    /** Dana's Google person: the calendar write failed at save; status active today. */
+    const googleFailed = async (deps: TestDeps, at: number): Promise<string> => {
+      const person = await connected(deps);
+      deps.google.failNext.insertEvent = { status: 500, code: "boom" };
+      const saved = await saveStatus(
+        withGoogle(deps),
+        person,
+        out("2026-11-12", "2026-11-13"),
+        "xoxp-dana",
+      );
+      await dueAt(deps, saved.status.id, "google-calendar", at);
+      return saved.status.id;
+    };
+
+    it("retryWeight: Slack 1, either Google system 2", () => {
+      expect(retryWeight("slack-status")).toBe(1);
+      expect(retryWeight("google-calendar")).toBe(2);
+      expect(retryWeight("gmail-responder")).toBe(2);
+    });
+
+    it("a scheduled status starts with Slack only: no second Google call at the start", async () => {
+      const deps = testDeps();
+      const person = await connected(deps);
+      const vacation = countSetVacation(deps);
+      const saved = await saveStatus(
+        withGoogle(deps),
+        person,
+        out("2026-11-13", "2026-11-14"),
+        "xoxp-dana",
+      );
+      expect(deps.google.inserts).toHaveLength(1);
+      expect(vacation.calls).toBe(1);
+      deps.clock.now = saved.status.startMs;
+      expect((await runTick(deps)).started).toBe(1);
+      expect(deps.slack.statuses.get("xoxp-dana")).toMatchObject({ text: "Out of office" });
+      expect(deps.google.inserts).toHaveLength(1);
+      expect(vacation.calls).toBe(1);
+      expect(await targetFor(deps, saved.status.id, "google-calendar")).toMatchObject({
+        state: "done",
+        attempts: 1,
+      });
+      expect(await targetFor(deps, saved.status.id, "gmail-responder")).toMatchObject({
+        state: "done",
+        attempts: 1,
+      });
+    });
+
+    it("a Google write still pending at the start is left to the retry step, not run by the start", async () => {
+      const deps = testDeps();
+      const person = await connected(deps);
+      const saved = await saveStatus(
+        withGoogle(deps),
+        person,
+        out("2026-11-13", "2026-11-14"),
+        "xoxp-dana",
+      );
+      await deps.db
+        .update(schema.statusTargets)
+        .set({ state: "pending", attempts: 0, externalId: null, nextAttemptAt: NOW + DAY * 3 })
+        .where(
+          and(
+            eq(schema.statusTargets.statusId, saved.status.id),
+            eq(schema.statusTargets.system, "google-calendar"),
+          ),
+        );
+      deps.google.events.clear();
+      deps.google.inserts.length = 0;
+      deps.clock.now = saved.status.startMs;
+      expect((await runTick(deps)).started).toBe(1);
+      expect(deps.google.inserts).toHaveLength(0);
+      expect((await targetFor(deps, saved.status.id, "google-calendar"))?.state).toBe("pending");
+    });
+
+    it("retries a failed calendar write before the status starts", async () => {
+      const deps = testDeps();
+      const person = await connected(deps);
+      deps.google.failNext.insertEvent = { status: 500, code: "boom" };
+      const saved = await saveStatus(
+        withGoogle(deps),
+        person,
+        out("2026-11-14", "2026-11-15"),
+        "xoxp-dana",
+      );
+      const calendar = await targetFor(deps, saved.status.id, "google-calendar");
+      expect(calendar).toMatchObject({ state: "failed", nextAttemptAt: NOW + 60_000 });
+      expect(deps.google.inserts).toHaveLength(0);
+      deps.clock.now = NOW + 59_000;
+      expect((await runTick(deps)).retried).toBe(0);
+      deps.clock.now = NOW + 60_000;
+      expect((await runTick(deps)).retried).toBe(1);
+      expect(await targetFor(deps, saved.status.id, "google-calendar")).toMatchObject({
+        state: "done",
+        attempts: 2,
+      });
+      expect(deps.google.inserts).toHaveLength(1);
+      expect((await statusRow(deps, saved.status.id))?.state).toBe("scheduled");
+      expect(await targetFor(deps, saved.status.id, "slack-status")).toMatchObject({
+        state: "pending",
+        attempts: 0,
+      });
+    });
+
+    it("never picks up a scheduled status's Slack target in the retry step", async () => {
+      const deps = testDeps();
+      await seedWorkspace(deps);
+      const saved = await saveStatus(
+        withGoogle(deps),
+        await dana(deps),
+        out("2026-11-14", "2026-11-15"),
+        "xoxp-dana",
+      );
+      await dueAt(deps, saved.status.id, "slack-status", NOW - 1);
+      expect((await runTick(deps)).retried).toBe(0);
+      expect(deps.slack.statuses.size).toBe(0);
+      expect(await targetFor(deps, saved.status.id, "slack-status")).toMatchObject({
+        state: "pending",
+        attempts: 0,
+      });
+    });
+
+    it("budget: three Slack retries due, two run", async () => {
+      const deps = testDeps();
+      await seedWorkspace(deps);
+      const ids = [
+        await slackPerson(deps, "U_A", NOW + 1000),
+        await slackPerson(deps, "U_B", NOW + 2000),
+        await slackPerson(deps, "U_C", NOW + 3000),
+      ];
+      deps.clock.now = NOW + 10 * 60_000;
+      expect((await runTick(deps)).retried).toBe(2);
+      const states = await Promise.all(ids.map((id) => targetFor(deps, id, "slack-status")));
+      expect(states.map((t) => t?.state)).toEqual(["done", "done", "failed"]);
+    });
+
+    it("budget: a Google retry first runs alone", async () => {
+      const deps = testDeps();
+      const g = await googleFailed(deps, NOW + 1000);
+      const a = await slackPerson(deps, "U_A", NOW + 2000);
+      const b = await slackPerson(deps, "U_B", NOW + 3000);
+      deps.clock.now = NOW + 10 * 60_000;
+      expect((await runTick(deps)).retried).toBe(1);
+      expect((await targetFor(deps, g, "google-calendar"))?.state).toBe("done");
+      expect((await targetFor(deps, a, "slack-status"))?.state).toBe("failed");
+      expect((await targetFor(deps, b, "slack-status"))?.state).toBe("failed");
+    });
+
+    it("budget: a Slack retry then a Google one runs only the Slack one; Google goes next minute", async () => {
+      const deps = testDeps();
+      const a = await slackPerson(deps, "U_A", NOW + 1000);
+      const g = await googleFailed(deps, NOW + 2000);
+      deps.clock.now = NOW + 10 * 60_000;
+      expect((await runTick(deps)).retried).toBe(1);
+      expect((await targetFor(deps, a, "slack-status"))?.state).toBe("done");
+      expect((await targetFor(deps, g, "google-calendar"))?.state).toBe("failed");
+      deps.clock.now += 60_000;
+      expect((await runTick(deps)).retried).toBe(1);
+      expect((await targetFor(deps, g, "google-calendar"))?.state).toBe("done");
+    });
+
+    it("with the demo limits ({ starts: 2, retries: 1 }) a Google retry still runs", async () => {
+      const deps = testDeps();
+      const g = await googleFailed(deps, NOW + 1000);
+      deps.clock.now = NOW + 10 * 60_000;
+      const steps = await runStatusSteps(deps, {}, { starts: 2, retries: 1 });
+      expect(steps.retried).toBe(1);
+      expect((await targetFor(deps, g, "google-calendar"))?.state).toBe("done");
+    });
+
+    it("tells the person once when the calendar write fails the sixth time", async () => {
+      const deps = testDeps();
+      const g = await googleFailed(deps, NOW + 1000);
+      await deps.db
+        .update(schema.statusTargets)
+        .set({ attempts: 5 })
+        .where(eq(schema.statusTargets.statusId, g));
+      deps.google.failNext.insertEvent = { status: 500, code: "boom" };
+      deps.clock.now = NOW + 10 * 60_000;
+      expect((await runTick(deps)).retried).toBe(1);
+      expect(deps.slack.messages).toHaveLength(1);
+      expect(deps.slack.messages[0]?.channel).toBe("U_DANA");
+      expect(deps.slack.messages[0]?.text).toMatch(
+        /^Steward tried six times to add your calendar event for Out of office \(.+\) and it didn't go through\. Set it by hand, or run \/ooo again\.$/,
+      );
+    });
+
+    it("tells the person once when the Gmail auto-reply fails the sixth time", async () => {
+      const deps = testDeps();
+      const person = await connected(deps);
+      deps.google.failNext.getVacation = { status: 500, code: "boom" };
+      const saved = await saveStatus(
+        withGoogle(deps),
+        person,
+        out("2026-11-12", "2026-11-13"),
+        "xoxp-dana",
+      );
+      await deps.db
+        .update(schema.statusTargets)
+        .set({ attempts: 5, nextAttemptAt: NOW + 1000 })
+        .where(
+          and(
+            eq(schema.statusTargets.statusId, saved.status.id),
+            eq(schema.statusTargets.system, "gmail-responder"),
+          ),
+        );
+      deps.google.failNext.getVacation = { status: 500, code: "boom" };
+      deps.clock.now = NOW + 10 * 60_000;
+      expect((await runTick(deps)).retried).toBe(1);
+      expect(deps.slack.messages).toHaveLength(1);
+      expect(deps.slack.messages[0]?.text).toMatch(
+        /^Steward tried six times to turn on your Gmail auto-reply for Out of office \(.+\) and it didn't go through\. Set it by hand, or run \/ooo again\.$/,
+      );
+    });
+
+    it("tells the person when a Google retry ends skipped, with the reason", async () => {
+      const deps = testDeps();
+      const g = await googleFailed(deps, NOW + 1000);
+      const person = await dana(deps);
+      await setGoogleHealth(deps.db, person.id, "revoked", NOW);
+      deps.clock.now = NOW + 10 * 60_000;
+      expect((await runTick(deps)).retried).toBe(1);
+      expect((await targetFor(deps, g, "google-calendar"))?.state).toBe("skipped");
+      expect(deps.slack.messages).toHaveLength(1);
+      expect(deps.slack.messages[0]?.text).toMatch(
+        /^Steward couldn't add your calendar event for Out of office \(.+\): Reconnect Google — run \/ooo google\.$/,
+      );
+    });
   });
 });
