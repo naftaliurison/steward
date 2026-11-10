@@ -15,7 +15,7 @@ import {
   schema,
   targetsForStatus,
 } from "@steward/core";
-import { and, asc, eq, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { cleanupDemoSessions } from "./demo/session";
 import type { Deps } from "./deps";
 
@@ -33,7 +33,12 @@ export type StatusSteps = {
 /**
  * The most the every-minute tick does in one run. With these the worst case is 44 D1 statements and
  * 7 Slack calls; both free plans stop an invocation at 50. Raise them only with that sum redone.
+ * The count assumes one target per status. A retry is 3 statements: the claim, the update and the
+ * audit row (the outcome comes back from the engine, so there is no re-read).
  */
+/** A retry is claimed for this long; if the tick dies after claiming, the target is due again when it ends. */
+const RETRY_LEASE_MS = 5 * 60_000;
+
 export const TICK_LIMITS: TickLimits = { starts: 3, retries: 2 };
 /** A demo request also claims an action, moves the clock and reads its state, so it does less. */
 export const DEMO_TICK_LIMITS: TickLimits = { starts: 2, retries: 1 };
@@ -209,6 +214,24 @@ async function retryDue(deps: TickDeps, scope: TickScope, limit: number): Promis
   let retried = 0;
   for (const { target, status, person, botTokenSealed } of due) {
     try {
+      // Claim it: one update, so two overlapping ticks cannot both write it. It leaves state and
+      // attempts alone (the engine's own guard reads them) and moves the retry time out by the lease;
+      // recording the result sets the real next time.
+      const claimed = await deps.db
+        .update(schema.statusTargets)
+        .set({ nextAttemptAt: deps.now() + RETRY_LEASE_MS })
+        .where(
+          and(
+            eq(schema.statusTargets.id, target.id),
+            eq(schema.statusTargets.state, target.state),
+            eq(schema.statusTargets.attempts, target.attempts),
+            target.nextAttemptAt === null
+              ? isNull(schema.statusTargets.nextAttemptAt)
+              : eq(schema.statusTargets.nextAttemptAt, target.nextAttemptAt),
+          ),
+        )
+        .returning({ id: schema.statusTargets.id });
+      if (claimed.length === 0) continue;
       const [after] = await retryTargets(
         deps.db,
         registryFor(deps),
@@ -220,15 +243,18 @@ async function retryDue(deps: TickDeps, scope: TickScope, limit: number): Promis
         [target],
         deps.now,
       );
+      if (!after?.ran) continue;
       retried++;
-      if (after?.state === "failed" && after.attempts >= MAX_ATTEMPTS) {
+      // Only the tick whose result was recorded tells the person.
+      if (!after.won) continue;
+      if (after.state === "failed" && after.attempts >= MAX_ATTEMPTS) {
         await tell(
           deps,
           botTokenSealed,
           person,
           `Steward tried six times to set your Slack status for ${describeStatus(status, person.tz)} and it didn't go through (${after.lastError ?? "unknown error"}). Set it by hand in Slack, or run /ooo again.`,
         );
-      } else if (after?.state === "skipped") {
+      } else if (after.state === "skipped") {
         await tell(
           deps,
           botTokenSealed,

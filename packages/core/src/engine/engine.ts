@@ -110,6 +110,28 @@ async function record(
   return true;
 }
 
+/** Performs one target's write through its connector and says what to record. Never throws. */
+async function perform(
+  registry: ConnectorRegistry,
+  ctx: ActorCtx,
+  target: TargetRow,
+): Promise<Patch> {
+  const spec = JSON.parse(target.spec) as WriteSpec;
+  const connector = registry.get(target.system);
+  if (!connector) return { state: "skipped", lastError: `no connector for ${target.system}` };
+  try {
+    const { externalId } = await connector.perform(spec, {
+      ...ctx,
+      idempotencyKey: target.idempotencyKey,
+    });
+    return { state: "done", externalId, lastError: null };
+  } catch (err) {
+    return err instanceof SkipWrite
+      ? { state: "skipped", lastError: err.reason }
+      : { state: "failed", lastError: errorMessage(err) };
+  }
+}
+
 async function run(
   db: Db,
   registry: ConnectorRegistry,
@@ -120,25 +142,7 @@ async function run(
 ): Promise<TargetRow[]> {
   for (const target of targets) {
     if (!from.includes(target.state as TargetState)) continue;
-    const spec = JSON.parse(target.spec) as WriteSpec;
-    const connector = registry.get(target.system);
-    let patch: Patch;
-    if (!connector) {
-      patch = { state: "skipped", lastError: `no connector for ${target.system}` };
-    } else {
-      try {
-        const { externalId } = await connector.perform(spec, {
-          ...ctx,
-          idempotencyKey: target.idempotencyKey,
-        });
-        patch = { state: "done", externalId, lastError: null };
-      } catch (err) {
-        patch =
-          err instanceof SkipWrite
-            ? { state: "skipped", lastError: err.reason }
-            : { state: "failed", lastError: errorMessage(err) };
-      }
-    }
+    const patch = await perform(registry, ctx, target);
     await record(db, ctx, target, `${target.system}.${target.op}`, patch, now());
   }
   return targetsById(
@@ -158,15 +162,72 @@ export async function executeTargets(
   return run(db, registry, ctx, targets, now, ["pending"]);
 }
 
-/** Tries failed targets again, and runs targets that were left pending. Done, skipped and undone ones are left alone. */
+/** What happened to one target in `retryTargets`. */
+export type RetryOutcome = {
+  id: string;
+  /** False when the target was left alone (not pending or failed, or out of tries): nothing was written. */
+  ran: boolean;
+  /** True only if this call's result was recorded; false if the row changed underneath it or it did not run. */
+  won: boolean;
+  /** The target's state, attempts and last error after this call (as they were read if it did not win). */
+  state: string;
+  attempts: number;
+  lastError: string | null;
+  externalId: string | null;
+  nextAttemptAt: number | null;
+};
+
+/**
+ * Tries failed targets again, and runs targets that were left pending. Done, skipped and undone
+ * ones are left alone, and so is one that has used all its tries. Says per target whether its
+ * result was recorded; a caller that must act once (like telling the person) acts only on a win.
+ */
 export async function retryTargets(
   db: Db,
   registry: ConnectorRegistry,
   ctx: ActorCtx,
   targets: TargetRow[],
   now: () => number,
-): Promise<TargetRow[]> {
-  return run(db, registry, ctx, targets, now, ["pending", "failed"]);
+): Promise<RetryOutcome[]> {
+  const outcomes: RetryOutcome[] = [];
+  for (const target of targets) {
+    const unchanged = (ran: boolean): RetryOutcome => ({
+      id: target.id,
+      ran,
+      won: false,
+      state: target.state,
+      attempts: target.attempts,
+      lastError: target.lastError,
+      externalId: target.externalId,
+      nextAttemptAt: target.nextAttemptAt,
+    });
+    if (
+      (target.state !== "pending" && target.state !== "failed") ||
+      target.attempts >= MAX_ATTEMPTS
+    ) {
+      outcomes.push(unchanged(false));
+      continue;
+    }
+    const patch = await perform(registry, ctx, target);
+    const at = now();
+    const won = await record(db, ctx, target, `${target.system}.${target.op}`, patch, at);
+    if (!won) {
+      outcomes.push(unchanged(true));
+      continue;
+    }
+    const attempts = target.attempts + 1;
+    outcomes.push({
+      id: target.id,
+      ran: true,
+      won: true,
+      state: patch.state,
+      attempts,
+      lastError: patch.lastError,
+      externalId: patch.externalId === undefined ? target.externalId : patch.externalId,
+      nextAttemptAt: patch.state === "failed" ? nextAttemptAfter(attempts, at) : null,
+    });
+  }
+  return outcomes;
 }
 
 /** Reverses done targets through their connector; pending ones simply become undone; failed ones stay failed. */

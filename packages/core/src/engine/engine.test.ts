@@ -232,9 +232,15 @@ describe("engine", () => {
     const registry = new ConnectorRegistry().register(flaky);
     let rows = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
     rows = await executeTargets(db, registry, ctx, rows, now);
-    rows = await retryTargets(db, registry, ctx, rows, now);
-    expect(rows[0]).toMatchObject({ state: "failed", attempts: 2, nextAttemptAt: now() + 120_000 });
-    rows = await retryTargets(db, registry, ctx, rows, now);
+    expect((await retryTargets(db, registry, ctx, rows, now))[0]).toMatchObject({
+      won: true,
+      state: "failed",
+      attempts: 2,
+      nextAttemptAt: now() + 120_000,
+    });
+    rows = await targetsForStatus(db, "S1");
+    expect((await retryTargets(db, registry, ctx, rows, now))[0]).toMatchObject({ won: true });
+    rows = await targetsForStatus(db, "S1");
     expect(rows[0]).toMatchObject({
       state: "done",
       attempts: 3,
@@ -251,7 +257,10 @@ describe("engine", () => {
     const registry = new ConnectorRegistry().register(new RecordingConnector("a", "fail"));
     let rows = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
     rows = await executeTargets(db, registry, ctx, rows, now);
-    for (let i = 0; i < 5; i++) rows = await retryTargets(db, registry, ctx, rows, now);
+    for (let i = 0; i < 5; i++) {
+      await retryTargets(db, registry, ctx, rows, now);
+      rows = await targetsForStatus(db, "S1");
+    }
     expect(rows[0]).toMatchObject({ state: "failed", attempts: 6, nextAttemptAt: null });
   });
 
@@ -260,8 +269,38 @@ describe("engine", () => {
     const registry = new ConnectorRegistry().register(a);
     const rows = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }], 1);
     const [done] = await retryTargets(db, registry, ctx, rows, now);
-    expect(done?.state).toBe("done");
+    expect(done).toMatchObject({ ran: true, won: true, state: "done", attempts: 1 });
     expect(a.performed).toHaveLength(1);
+  });
+
+  it("retry does not run a target that has used all its tries, whatever the caller filtered", async () => {
+    const a = new RecordingConnector("a", "fail");
+    const registry = new ConnectorRegistry().register(a);
+    const [created] = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    if (!created) throw new Error("no target");
+    const spent = { ...created, state: "failed", attempts: MAX_ATTEMPTS, lastError: "old" };
+    const [outcome] = await retryTargets(db, registry, ctx, [spent], now);
+    expect(outcome).toMatchObject({
+      ran: false,
+      won: false,
+      state: "failed",
+      attempts: MAX_ATTEMPTS,
+      lastError: "old",
+    });
+    expect(a.keysSeen).toHaveLength(0);
+  });
+
+  it("retry says it lost when the row changed underneath it, and reports the state it read", async () => {
+    const a = new RecordingConnector("a");
+    const registry = new ConnectorRegistry().register(a);
+    const stale = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }], 1);
+    await db
+      .update(statusTargets)
+      .set({ attempts: 1, state: "failed" })
+      .where(eq(statusTargets.statusId, "S1"));
+    const [outcome] = await retryTargets(db, registry, ctx, stale, now);
+    expect(outcome).toMatchObject({ ran: true, won: false, state: "pending", attempts: 0 });
+    expect(await db.select().from(audit)).toHaveLength(0);
   });
 
   it("does not record a result over a row that changed underneath it", async () => {

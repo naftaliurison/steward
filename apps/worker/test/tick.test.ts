@@ -253,6 +253,76 @@ describe("tick", () => {
     expect(deps.slack.messages).toHaveLength(1);
   });
 
+  /** A failed write that is due now, on a status that is active today. */
+  const dueFailedWrite = async (deps: TestDeps) => {
+    await seedWorkspace(deps);
+    deps.slack.failNext.setUserStatus = "ratelimited";
+    const saved = await saveStatus(
+      availability(deps),
+      await dana(deps),
+      out("2026-11-12", "2026-11-13"),
+      "xoxp-dana",
+    );
+    deps.clock.now = NOW + 60_000;
+    return saved;
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it("two overlapping ticks write a due retry to Slack once", async () => {
+    const deps = testDeps();
+    const saved = await dueFailedWrite(deps);
+    const realSet = deps.slack.setUserStatus.bind(deps.slack);
+    let writes = 0;
+    deps.slack.setUserStatus = async (args) => {
+      writes++;
+      await settle();
+      return realSet(args);
+    };
+    const [first, second] = await Promise.all([runStatusSteps(deps, {}), runStatusSteps(deps, {})]);
+    expect(writes).toBe(1);
+    expect(first.retried + second.retried).toBe(1);
+    expect(await targetOf(deps, saved.status.id)).toMatchObject({ state: "done", attempts: 2 });
+    expect(deps.slack.messages.length).toBeLessThanOrEqual(1);
+  });
+
+  it("when the sixth try fails, two overlapping ticks send one give-up message", async () => {
+    const deps = testDeps();
+    const saved = await dueFailedWrite(deps);
+    await deps.db
+      .update(schema.statusTargets)
+      .set({ attempts: 5, nextAttemptAt: NOW })
+      .where(eq(schema.statusTargets.statusId, saved.status.id));
+    deps.slack.setUserStatus = async () => {
+      await settle();
+      throw new Error("still down");
+    };
+    await Promise.all([runStatusSteps(deps, {}), runStatusSteps(deps, {})]);
+    expect(await targetOf(deps, saved.status.id)).toMatchObject({ state: "failed", attempts: 6 });
+    expect(deps.slack.messages).toHaveLength(1);
+    expect(deps.slack.messages[0]?.text).toMatch(/^Steward tried six times/);
+  });
+
+  it("a claimed retry whose tick died is due again when the lease passes", async () => {
+    const deps = testDeps();
+    const saved = await dueFailedWrite(deps);
+    const realSet = deps.slack.setUserStatus.bind(deps.slack);
+    deps.slack.setUserStatus = () => new Promise<never>(() => {});
+    void runStatusSteps(deps, {});
+    await settle();
+    // Claimed: pushed out by the lease, nothing recorded.
+    expect(await targetOf(deps, saved.status.id)).toMatchObject({
+      state: "failed",
+      attempts: 1,
+      nextAttemptAt: NOW + 60_000 + 5 * 60_000,
+    });
+    deps.slack.setUserStatus = realSet;
+    deps.clock.now = NOW + 60_000 + 5 * 60_000 - 1;
+    expect((await runStatusSteps(deps, {})).retried).toBe(0);
+    deps.clock.now = NOW + 60_000 + 5 * 60_000;
+    expect((await runStatusSteps(deps, {})).retried).toBe(1);
+    expect(await targetOf(deps, saved.status.id)).toMatchObject({ state: "done", attempts: 2 });
+  });
+
   it("does not retry a write whose status is no longer active", async () => {
     const deps = testDeps();
     await seedWorkspace(deps);
