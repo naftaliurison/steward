@@ -40,6 +40,22 @@ export {
   targetsForStatus,
   undoTargets,
 } from "./engine/engine";
+export type {
+  GoogleAppCredentials,
+  GoogleCalendarEntry,
+  GoogleClient,
+  GoogleEventInput,
+  GoogleEventTime,
+  GoogleTokens,
+  VacationSettings,
+} from "./google/client";
+export {
+  emailFromIdToken,
+  GOOGLE_TIMEOUT_MS,
+  GoogleApiError,
+  RealGoogleClient,
+} from "./google/client";
+export { FakeGoogleClient } from "./google/fake";
 export { newId } from "./ids";
 export * from "./slack/blocks";
 export type {
