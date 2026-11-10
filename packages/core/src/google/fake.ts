@@ -14,6 +14,8 @@ const OFF: VacationSettings = {
   responseBodyPlainText: "",
   startTime: null,
   endTime: null,
+  restrictToContacts: false,
+  restrictToDomain: false,
 };
 
 /** In-memory Google: one account's calendars, events and auto-reply, with every call recorded. */

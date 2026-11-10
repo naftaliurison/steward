@@ -29,6 +29,9 @@ export type VacationSettings = {
   responseBodyPlainText: string;
   startTime: number | null;
   endTime: number | null;
+  /** Who gets the reply: the person's own setting, kept as it is when Steward writes. */
+  restrictToContacts: boolean;
+  restrictToDomain: boolean;
 };
 
 export type GoogleAppCredentials = { clientId: string; clientSecret: string };
@@ -92,6 +95,8 @@ type VacationBody = {
   responseBodyPlainText?: string;
   startTime?: string;
   endTime?: string;
+  restrictToContacts?: boolean;
+  restrictToDomain?: boolean;
 };
 
 /** The token endpoint says `{ error: "invalid_grant" }`; the APIs say `{ error: { errors: [{ reason }] } }`. */
@@ -275,6 +280,8 @@ export class RealGoogleClient implements GoogleClient {
       responseBodyPlainText: data.responseBodyPlainText ?? "",
       startTime: time(data.startTime),
       endTime: time(data.endTime),
+      restrictToContacts: data.restrictToContacts === true,
+      restrictToDomain: data.restrictToDomain === true,
     };
   }
 
@@ -287,8 +294,8 @@ export class RealGoogleClient implements GoogleClient {
         enableAutoReply: s.enableAutoReply,
         responseSubject: s.responseSubject,
         responseBodyPlainText: s.responseBodyPlainText,
-        restrictToContacts: false,
-        restrictToDomain: false,
+        restrictToContacts: s.restrictToContacts,
+        restrictToDomain: s.restrictToDomain,
         ...(s.startTime === null ? {} : { startTime: String(s.startTime) }),
         ...(s.endTime === null ? {} : { endTime: String(s.endTime) }),
       }),

@@ -141,6 +141,8 @@ describe("RealGoogleClient", () => {
       responseBodyPlainText: "Back soon",
       startTime: 1000,
       endTime: 2000,
+      restrictToContacts: false,
+      restrictToDomain: false,
     });
     expect(call()[0]).toBe("https://gmail.googleapis.com/gmail/v1/users/me/settings/vacation");
     await client.setVacation({
@@ -151,6 +153,8 @@ describe("RealGoogleClient", () => {
         responseBodyPlainText: "Hello",
         startTime: 1000,
         endTime: 2000,
+        restrictToContacts: false,
+        restrictToDomain: false,
       },
     });
     expect(call(1)[1].method).toBe("PUT");
@@ -171,6 +175,8 @@ describe("RealGoogleClient", () => {
         responseBodyPlainText: "",
         startTime: null,
         endTime: null,
+        restrictToContacts: false,
+        restrictToDomain: false,
       },
     });
     expect(JSON.parse(call(2)[1].body as string)).not.toHaveProperty("startTime");
@@ -184,6 +190,36 @@ describe("RealGoogleClient", () => {
       responseBodyPlainText: "",
       startTime: null,
       endTime: null,
+      restrictToContacts: false,
+      restrictToDomain: false,
+    });
+  });
+
+  it("reads the person's own restrict-to-contacts setting", async () => {
+    const { client } = clientAnswering(json({ enableAutoReply: true, restrictToContacts: true }));
+    expect(await client.getVacation({ accessToken: "ya29.a" })).toMatchObject({
+      restrictToContacts: true,
+      restrictToDomain: false,
+    });
+  });
+
+  it("sends the restrict settings as given", async () => {
+    const { client, call } = clientAnswering(json({}));
+    await client.setVacation({
+      accessToken: "ya29.a",
+      settings: {
+        enableAutoReply: true,
+        responseSubject: "s",
+        responseBodyPlainText: "b",
+        startTime: 1,
+        endTime: 2,
+        restrictToContacts: true,
+        restrictToDomain: true,
+      },
+    });
+    expect(JSON.parse(call()[1].body as string)).toMatchObject({
+      restrictToContacts: true,
+      restrictToDomain: true,
     });
   });
 

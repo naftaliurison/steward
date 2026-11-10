@@ -61,6 +61,8 @@ describe("FakeGoogleClient", () => {
       responseBodyPlainText: "Hello",
       startTime: 1,
       endTime: 2,
+      restrictToContacts: false,
+      restrictToDomain: false,
     };
     await google.setVacation({ accessToken: "t", settings });
     expect(await google.getVacation({ accessToken: "t" })).toEqual(settings);
