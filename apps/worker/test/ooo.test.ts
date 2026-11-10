@@ -4,7 +4,14 @@ import {
   UNDO_ACTION,
   zonedTimeToEpochMs,
 } from "@steward/availability";
-import { type Block, schema } from "@steward/core";
+import {
+  type Block,
+  ensurePerson,
+  schema,
+  seal,
+  setPersonUserToken,
+  upsertWorkspace,
+} from "@steward/core";
 import { seedGoogleConnection } from "@steward/core/testing";
 import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -485,12 +492,38 @@ describe("/ooo with Google", () => {
     app = createApp(deps);
     await seedWorkspace(deps);
     const receipt = await save("out");
-    expect(JSON.stringify(receipt?.blocks)).not.toContain("run /ooo google");
+    expect(JSON.stringify(receipt?.blocks)).not.toContain(GOOGLE_HINT);
   });
 
   it("does not hint for a status that has nothing to do with Google", async () => {
     await seedWorkspace(deps);
     const receipt = await save("remote");
-    expect(JSON.stringify(receipt?.blocks)).not.toContain("run /ooo google");
+    expect(JSON.stringify(receipt?.blocks)).not.toContain(GOOGLE_HINT);
+  });
+
+  it("never tells a demo visitor to connect Google, though Google is configured", async () => {
+    await upsertWorkspace(deps.db, {
+      id: "demo:abc",
+      name: "Demo",
+      botTokenSealed: await seal(deps.tokenKey, "xoxb-bot"),
+      botUserId: "UBOT",
+      installedAt: NOW - 1000,
+    });
+    const person = await ensurePerson(deps.db, "demo:abc", "U_DANA", "dana");
+    await deps.db
+      .update(schema.people)
+      .set({ tz: TZ, profileSyncedAt: NOW })
+      .where(eq(schema.people.id, person.id));
+    await setPersonUserToken(deps.db, person.id, await seal(deps.tokenKey, "xoxp-dana"));
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({
+        ...submission({ type: "out", from: "2026-11-12", to: "2026-11-17" }),
+        team: { id: "demo:abc" },
+      }),
+    });
+    await flush(deps);
+    const receipt = deps.slack.responses.at(-1);
+    expect(receipt?.text).toMatch(/^Out of office · /);
+    expect(JSON.stringify(receipt?.blocks)).not.toContain(GOOGLE_HINT);
   });
 });
