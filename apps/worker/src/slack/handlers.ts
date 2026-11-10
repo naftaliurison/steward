@@ -5,11 +5,18 @@ import {
   SlackStatusConnector,
   STATUS_MODAL_CALLBACK,
   saveStatus,
+  scheduledStatusesFor,
   todayIn,
   UNDO_ACTION,
   undoStatus,
 } from "@steward/availability";
-import { ConnectorRegistry, getWorkspace, open, type PersonRow } from "@steward/core";
+import {
+  ConnectorRegistry,
+  getWorkspace,
+  open,
+  type PersonRow,
+  targetsForStatus,
+} from "@steward/core";
 import type { Deps } from "../deps";
 import { personForSlackUser } from "../people";
 import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } from "../slackTypes";
@@ -25,6 +32,27 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 
 /** What the HTTP route must answer Slack with. */
 export type InteractionAnswer = { kind: "json"; body: unknown } | { kind: "text"; body: string };
+
+/** How many scheduled statuses /ooo shows. Slack takes five messages on one response_url. */
+export const SCHEDULED_SHOWN = 3;
+
+/** One card per status that has not started yet, each with its own Cancel. Never throws: the form is already open. */
+async function showScheduled(deps: Deps, person: PersonRow, responseUrl: string): Promise<void> {
+  try {
+    const scheduled = await scheduledStatusesFor(deps.db, person.id, SCHEDULED_SHOWN);
+    for (const status of scheduled) {
+      const card = resultCard({
+        status,
+        targets: await targetsForStatus(deps.db, status.id),
+        tz: person.tz,
+        now: deps.now(),
+      });
+      await deps.slack.respond({ responseUrl, ...card });
+    }
+  } catch (err) {
+    console.error("could not show scheduled statuses", { person: person.id, err });
+  }
+}
 
 /** The slash-command handler. Returns the text Slack shows the caller at once ("" for nothing). */
 export async function handleSlashCommand(deps: Deps, form: URLSearchParams): Promise<string> {
@@ -54,6 +82,8 @@ export async function handleSlashCommand(deps: Deps, form: URLSearchParams): Pro
         responseUrl: form.get("response_url") ?? "",
       }),
     });
+    const responseUrl = form.get("response_url") ?? "";
+    if (responseUrl) deps.defer(showScheduled(deps, person, responseUrl));
   } catch (err) {
     console.error("could not open the status form", { workspace: workspace.id, err });
     return "Steward couldn't open the form just now. Please try /ooo again.";

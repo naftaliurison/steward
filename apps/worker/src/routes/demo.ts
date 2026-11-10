@@ -8,11 +8,13 @@ import {
   createDemoSession,
   type DemoSession,
   demoDeps,
+  demoWorkspaceId,
   getDemoSession,
 } from "../demo/session";
 import { readDemoEvents } from "../demo/slackClient";
 import type { Deps } from "../deps";
 import { handleInteraction, handleSlashCommand } from "../slack/handlers";
+import { DEMO_TICK_LIMITS, runStatusSteps } from "../tick";
 
 type Vars = { Variables: { session: DemoSession } };
 
@@ -242,6 +244,15 @@ export function demoRoutes(deps: Deps) {
     if (!(await claimDemoAction(deps, session))) return c.json({ error: SPENT }, 409);
     const advanced = await advanceDemoClock(deps, session, minutes * 60 * 1000);
     if (!advanced) return c.json({ error: CLOCK_AT_CAP }, 400);
+    // The every-minute tick leaves demo workspaces alone: a session's statuses start, end and retry
+    // by its own clock, at the moment the visitor moves it.
+    const d = demoDeps(deps, advanced);
+    try {
+      await runStatusSteps(d, { workspaceId: demoWorkspaceId(advanced.id) }, DEMO_TICK_LIMITS);
+    } catch (err) {
+      console.error("demo status steps failed", { session: advanced.id, err });
+    }
+    await d.settle();
     return c.json(await stateOf(deps, advanced));
   });
 

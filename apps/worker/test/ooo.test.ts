@@ -44,6 +44,52 @@ describe("/ooo", () => {
     app = createApp(deps);
   });
 
+  it("/ooo also shows the statuses that are scheduled, each with its own Cancel", async () => {
+    await seedWorkspace(deps);
+    for (const day of ["2026-11-20", "2026-11-13"]) {
+      await slackPost(app, "/slack/interactions", {
+        payload: JSON.stringify(submission({ type: "out", from: day, to: day })),
+      });
+      await flush(deps);
+    }
+    deps.slack.responses.length = 0;
+
+    const res = await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "trig-2",
+      response_url: RESPONSE_URL,
+    });
+    expect(res.status).toBe(200);
+    await flush(deps);
+    expect(deps.slack.responses).toHaveLength(2);
+    expect(deps.slack.responses[0]?.text).toMatch(/^Scheduled · Out of office · /);
+    expect(deps.slack.responses[1]?.text).toMatch(/^Scheduled · Out of office · /);
+    // Earliest first: the two cards are for different statuses, the 13th before the 20th.
+    const [first, second] = deps.slack.responses.map((r) => undoValue(r.blocks ?? []));
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    const rows = await deps.db.select().from(schema.statuses);
+    const startOf = (id: string | undefined) => rows.find((r) => r.id === id)?.startMs ?? 0;
+    expect(startOf(first)).toBeLessThan(startOf(second));
+  });
+
+  it("/ooo sends nothing extra when nothing is scheduled", async () => {
+    await seedWorkspace(deps);
+    await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "trig-3",
+      response_url: RESPONSE_URL,
+    });
+    await flush(deps);
+    expect(deps.slack.responses).toHaveLength(0);
+  });
+
   it("rejects an unsigned request", async () => {
     const res = await app.request("/slack/commands", { method: "POST", body: "command=%2Fooo" });
     expect(res.status).toBe(401);

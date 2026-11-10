@@ -1,8 +1,10 @@
+import { nextDay, STATUS_MODAL_CALLBACK, todayIn } from "@steward/availability";
 import { ensurePerson, schema, seal, upsertWorkspace } from "@steward/core";
 import { applyD1Migrations } from "@steward/core/testing";
 import { eq } from "drizzle-orm";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createApp } from "../src/app";
 import { createD1Db } from "../src/db";
 import {
   advanceDemoClock,
@@ -232,6 +234,44 @@ describe("the demo on the real D1 driver (Miniflare)", () => {
     queries = 0;
     const result = await runTick(deps);
     expect(result).toMatchObject({ started: 3, retried: 2 });
+    expect(queries).toBeLessThanOrEqual(45);
+  }, 60_000);
+
+  it("moving a demo clock that starts a scheduled status stays under D1 Free's 50 statements", async () => {
+    const app = createApp(deps);
+    const post = (path: string, body: unknown) =>
+      app.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const created = await post("/demo/sessions", {});
+    const session = (await created.json()) as { id: string };
+    const tomorrow = nextDay(todayIn("UTC", NOW));
+    const day = { selected_date: tomorrow };
+    await post(`/demo/${session.id}/interact`, {
+      type: "view_submission",
+      team: { id: "T_X" },
+      user: { id: "U_X" },
+      view: {
+        callback_id: STATUS_MODAL_CALLBACK,
+        private_metadata: "{}",
+        state: {
+          values: {
+            type: { type: { type: "static_select", selected_option: { value: "out" } } },
+            from: { from: { type: "datepicker", ...day } },
+            to: { to: { type: "datepicker", ...day } },
+            text: { text: { type: "plain_text_input", value: null } },
+            emoji: { emoji: { type: "plain_text_input", value: null } },
+          },
+        },
+      },
+    });
+    queries = 0;
+    const advanced = await post(`/demo/${session.id}/advance`, { minutes: 1440 });
+    expect(advanced.status).toBe(200);
+    const events = await readDemoEvents(deps.db, session.id);
+    expect(events.some((e) => e.kind === "status")).toBe(true);
     expect(queries).toBeLessThanOrEqual(45);
   }, 60_000);
 });
