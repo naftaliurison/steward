@@ -13,8 +13,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { SlackStatusConnector } from "../connectors/slackStatus";
 import {
   type AvailabilityDeps,
+  CANCEL_TOO_LATE,
   getStatus,
+  RECOVERY_DELAY_MS,
   saveStatus,
+  scheduledStatusesFor,
   UNDO_WINDOW_MS,
   undoStatus,
 } from "./service";
@@ -77,6 +80,65 @@ describe("saveStatus / undoStatus", () => {
     expect(status.state).toBe("scheduled");
     expect(targets[0]?.state).toBe("pending");
     expect(slack.statuses.size).toBe(0);
+    expect(status.undoUntilMs).toBe(status.startMs);
+    expect(targets[0]?.nextAttemptAt).toBe(status.startMs + RECOVERY_DELAY_MS);
+  });
+
+  it("a written target has no recovery time left", async () => {
+    const { targets } = await saveStatus(
+      deps,
+      dana,
+      { type: "out", from: "2026-11-12", to: "2026-11-12", text: "Out", emoji: ":x:" },
+      "xoxp-dana",
+    );
+    expect(targets[0]?.state).toBe("done");
+    expect(targets[0]?.nextAttemptAt).toBeNull();
+  });
+
+  it("a scheduled status can be cancelled days later, as long as it has not started", async () => {
+    const saved = await saveStatus(
+      deps,
+      dana,
+      { type: "remote", from: "2026-11-20", to: "2026-11-20", text: "Remote", emoji: ":house:" },
+      "xoxp-dana",
+    );
+    clock = NOW + 3 * 24 * 60 * 60 * 1000;
+    const result = await undoStatus(deps, saved.status.id, dana, "xoxp-dana");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.status.state).toBe("cancelled");
+    expect(result.targets[0]?.state).toBe("undone");
+    expect(slack.statuses.size).toBe(0);
+  });
+
+  it("refuses to cancel once the first day has begun, in plain words", async () => {
+    const saved = await saveStatus(
+      deps,
+      dana,
+      { type: "remote", from: "2026-11-20", to: "2026-11-20", text: "Remote", emoji: ":house:" },
+      "xoxp-dana",
+    );
+    clock = saved.status.startMs;
+    expect(await undoStatus(deps, saved.status.id, dana, "xoxp-dana")).toEqual({
+      error: CANCEL_TOO_LATE,
+    });
+  });
+
+  it("lists a person's scheduled statuses, earliest first, up to a limit", async () => {
+    const save = (day: string) =>
+      saveStatus(
+        deps,
+        dana,
+        { type: "out", from: day, to: day, text: "Out", emoji: ":x:" },
+        "xoxp-dana",
+      );
+    await save("2026-11-12"); // active today: not listed
+    const later = await save("2026-11-25");
+    const sooner = await save("2026-11-20");
+    expect((await scheduledStatusesFor(deps.db, dana.id, 5)).map((s) => s.id)).toEqual([
+      sooner.status.id,
+      later.status.id,
+    ]);
+    expect(await scheduledStatusesFor(deps.db, dana.id, 1)).toHaveLength(1);
   });
 
   it("without a Slack user token the write is skipped with a plain reason", async () => {
