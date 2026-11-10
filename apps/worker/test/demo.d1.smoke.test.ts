@@ -231,9 +231,31 @@ describe("the demo on the real D1 driver (Miniflare)", () => {
         .insert(schema.statusTargets)
         .values(target(`S_F${n}`, starting ? "pending" : "failed", starting ? 0 : 5));
     }
+    // One expired demo session with rows to delete, so the cleanup runs at its worst case (15 statements).
+    await deps.db.insert(schema.demoSessions).values({
+      id: "full-exp",
+      createdAt: at - 10_000,
+      expiresAt: at - 1,
+      youPersonId: "none",
+    });
+    await deps.db.insert(schema.workspaces).values({
+      id: demoWorkspaceId("full-exp"),
+      name: "Expired",
+      botTokenSealed: "sealed",
+      botUserId: "UB",
+      installedAt: at - 10_000,
+    });
+    await deps.db.insert(schema.demoEvents).values({
+      id: "full-exp-1",
+      sessionId: "full-exp",
+      seq: 1,
+      kind: "message",
+      payload: "{}",
+      at: at - 10_000,
+    });
     queries = 0;
     const result = await runTick(deps);
-    expect(result).toMatchObject({ started: 3, retried: 2 });
+    expect(result).toMatchObject({ started: 3, retried: 2, demoSessionsRemoved: 1 });
     expect(queries).toBeLessThanOrEqual(45);
   }, 60_000);
 

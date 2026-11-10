@@ -30,21 +30,24 @@ export type StatusSteps = {
   retried: number;
 };
 
+/** A retry is claimed for this long; if the tick dies after claiming, the target is due again when it ends. */
+const RETRY_LEASE_MS = 5 * 60_000;
+
 /**
  * The most the every-minute tick does in one run. With these the worst case is 44 D1 statements and
  * 7 Slack calls; both free plans stop an invocation at 50. Raise them only with that sum redone.
  * The count assumes one target per status. A retry is 3 statements: the claim, the update and the
  * audit row (the outcome comes back from the engine, so there is no re-read).
+ * Cloudflare may count D1 statements and outbound calls against one limit of 50, so the number to watch
+ * is statements plus Slack calls (44 + 7 in the worst case); the last demo-cleanup deletes are the part
+ * that would be cut and redone the next minute.
  */
-/** A retry is claimed for this long; if the tick dies after claiming, the target is due again when it ends. */
-const RETRY_LEASE_MS = 5 * 60_000;
-
 export const TICK_LIMITS: TickLimits = { starts: 3, retries: 2 };
 /** A demo request also claims an action, moves the clock and reads its state, so it does less. */
 export const DEMO_TICK_LIMITS: TickLimits = { starts: 2, retries: 1 };
 
 const inScope = (scope: TickScope) =>
-  scope.workspaceId
+  scope.workspaceId !== undefined
     ? eq(schema.statuses.workspaceId, scope.workspaceId)
     : sql`substr(${schema.statuses.workspaceId}, 1, 5) <> 'demo:'`;
 
@@ -252,7 +255,7 @@ async function retryDue(deps: TickDeps, scope: TickScope, limit: number): Promis
           deps,
           botTokenSealed,
           person,
-          `Steward tried six times to set your Slack status for ${describeStatus(status, person.tz)} and it didn't go through (${after.lastError ?? "unknown error"}). Set it by hand in Slack, or run /ooo again.`,
+          `Steward tried six times to set your Slack status for ${describeStatus(status, person.tz)} and it didn't go through. Set it by hand in Slack, or run /ooo again.`,
         );
       } else if (after.state === "skipped") {
         await tell(

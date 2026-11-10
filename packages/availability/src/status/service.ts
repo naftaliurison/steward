@@ -132,11 +132,6 @@ export async function undoStatus(
     return { error: "That status isn't yours or no longer exists." };
   if (status.state === "cancelled")
     return { status, targets: await targetsForStatus(deps.db, status.id) };
-  if (status.state !== "active" && status.state !== "scheduled") {
-    return {
-      error: "That status was already replaced by a newer one — undo the newer one instead.",
-    };
-  }
   if (status.undoUntilMs === null || status.undoUntilMs <= deps.now()) {
     // Saved ahead of its first day: what has run out is the time before the start, not five minutes.
     return {
@@ -144,6 +139,11 @@ export async function undoStatus(
         status.startMs > status.createdAt
           ? CANCEL_TOO_LATE
           : "The five-minute undo window has passed.",
+    };
+  }
+  if (status.state !== "active" && status.state !== "scheduled") {
+    return {
+      error: "That status was already replaced by a newer one — undo the newer one instead.",
     };
   }
   const targets = await undoTargets(

@@ -232,6 +232,24 @@ describe("saveStatus / undoStatus", () => {
     expect(rows[0]?.state).toBe("active");
   });
 
+  it("undo on a status the tick ended by date, after its window, says it is too late, not replaced", async () => {
+    const saved = await saveStatus(
+      deps,
+      dana,
+      { type: "remote", from: "2026-11-12", to: "2026-11-12", text: "Remote", emoji: ":house:" },
+      "xoxp-dana",
+    );
+    // What the minute tick does when the last day is over.
+    await db
+      .update(schema.statuses)
+      .set({ state: "ended", undoUntilMs: null })
+      .where(eq(schema.statuses.id, saved.status.id));
+    clock = NOW + 2 * 24 * 60 * 60 * 1000;
+    expect(await undoStatus(deps, saved.status.id, dana, "xoxp-dana")).toEqual({
+      error: "The five-minute undo window has passed.",
+    });
+  });
+
   it("undo without a Slack token is reported honestly", async () => {
     const saved = await saveStatus(
       deps,

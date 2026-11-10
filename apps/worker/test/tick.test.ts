@@ -246,7 +246,7 @@ describe("tick", () => {
     expect(deps.slack.messages).toHaveLength(1);
     expect(deps.slack.messages[0]?.channel).toBe("U_DANA");
     expect(deps.slack.messages[0]?.text).toMatch(
-      /^Steward tried six times to set your Slack status for Out of office \(.+\) and it didn't go through/,
+      /^Steward tried six times to set your Slack status for Out of office \(.+\) and it didn't go through\. Set it by hand in Slack, or run \/ooo again\.$/,
     );
     deps.clock.now += DAY / 2;
     expect((await runTick(deps)).retried).toBe(0);
@@ -282,7 +282,7 @@ describe("tick", () => {
     expect(writes).toBe(1);
     expect(first.retried + second.retried).toBe(1);
     expect(await targetOf(deps, saved.status.id)).toMatchObject({ state: "done", attempts: 2 });
-    expect(deps.slack.messages.length).toBeLessThanOrEqual(1);
+    expect(deps.slack.messages).toHaveLength(0);
   });
 
   it("when the sixth try fails, two overlapping ticks send one give-up message", async () => {
@@ -364,5 +364,56 @@ describe("tick", () => {
     expect((await statusRow(deps, "S_DEMO"))?.state).toBe("scheduled");
     expect((await runStatusSteps(deps, { workspaceId })).started).toBe(1);
     expect((await statusRow(deps, "S_DEMO"))?.state).toBe("active");
+  });
+
+  it("the every-minute tick neither ends nor retries anything in a demo workspace", async () => {
+    const deps = testDeps();
+    const s = await createDemoSession(deps, {});
+    if ("error" in s) throw new Error("unexpected busy");
+    const workspaceId = demoWorkspaceId(s.id);
+    const base = {
+      workspaceId,
+      personId: s.youPersonId,
+      type: "out",
+      text: "Out of office",
+      emoji: ":palm_tree:",
+      state: "active",
+      source: "form",
+      createdAt: NOW - 3 * DAY,
+      undoUntilMs: null,
+      replacedStatusId: null,
+    };
+    await deps.db.insert(schema.statuses).values([
+      { ...base, id: "S_DEMO_OVER", startMs: NOW - 2 * DAY, endMs: NOW - DAY },
+      { ...base, id: "S_DEMO_FAILED", startMs: NOW - 1, endMs: NOW + DAY },
+    ]);
+    await deps.db.insert(schema.statusTargets).values({
+      id: "ST_DEMO_FAILED",
+      statusId: "S_DEMO_FAILED",
+      system: "slack-status",
+      op: "set",
+      spec: "{}",
+      state: "failed",
+      externalId: null,
+      attempts: 2,
+      lastError: "ratelimited",
+      idempotencyKey: "S_DEMO_FAILED:slack-status:set",
+      nextAttemptAt: NOW - 1,
+    });
+    let slackCalls = 0;
+    for (const method of ["setUserStatus", "clearUserStatus", "postMessage"] as const) {
+      const real = deps.slack[method].bind(deps.slack) as (args: never) => Promise<unknown>;
+      (deps.slack as unknown as Record<string, unknown>)[method] = async (args: never) => {
+        slackCalls++;
+        return real(args);
+      };
+    }
+    const before = await targetOf(deps, "S_DEMO_FAILED");
+    const result = await runTick(deps);
+    expect(result).toMatchObject({ scheduledEnded: 0, ended: 0, started: 0, retried: 0 });
+    expect(slackCalls).toBe(0);
+    expect((await statusRow(deps, "S_DEMO_OVER"))?.state).toBe("active");
+    expect((await statusRow(deps, "S_DEMO_FAILED"))?.state).toBe("active");
+    expect(await targetOf(deps, "S_DEMO_FAILED")).toEqual(before);
   });
 });
