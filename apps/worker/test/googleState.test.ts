@@ -1,6 +1,7 @@
+import { slackSignature } from "@steward/core";
 import { describe, expect, it } from "vitest";
 import { signGoogleState, verifyGoogleState } from "../src/google/state";
-import { signState } from "../src/routes/oauth";
+import { signState, verifyState } from "../src/routes/oauth";
 import { SIGNING_SECRET } from "./helpers";
 
 const NOW = 1_800_000_000;
@@ -45,6 +46,22 @@ describe("Google state", () => {
     const slack = await signState(SIGNING_SECRET, NOW);
     expect(await verifyGoogleState(SIGNING_SECRET, slack, NOW)).toBeNull();
     expect(await verifyGoogleState(SIGNING_SECRET, `${slack}.x`, NOW)).toBeNull();
+  });
+
+  it("rejects a three-part state signed without the google: prefix", async () => {
+    const who = btoa(PERSON).replace(/=+$/, "");
+    const ts = String(NOW);
+    // What the Slack install flow signs: over its own text "install".
+    const slackMac = (await slackSignature(SIGNING_SECRET, ts, "install")).slice(3);
+    expect(await verifyGoogleState(SIGNING_SECRET, `${ts}.${who}.${slackMac}`, NOW)).toBeNull();
+    // The same text as Google's, minus the prefix.
+    const bareMac = (await slackSignature(SIGNING_SECRET, ts, `${ts}:${PERSON}`)).slice(3);
+    expect(await verifyGoogleState(SIGNING_SECRET, `${ts}.${who}.${bareMac}`, NOW)).toBeNull();
+  });
+
+  it("is not accepted by the Slack install check", async () => {
+    const google = await signGoogleState(SIGNING_SECRET, PERSON, NOW);
+    expect(await verifyState(SIGNING_SECRET, google, NOW)).toBe(false);
   });
 
   it("returns null for garbage without throwing", async () => {
