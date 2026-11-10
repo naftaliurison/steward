@@ -13,14 +13,17 @@ import { expiringOn401, googleAccessOrSkip } from "./googleAccess";
 
 export const AUTO_REPLY_ALREADY_ON = "your Gmail auto-reply is already on — Steward left it alone";
 
-/** Steward's own: on, with exactly this write's text and dates. */
+/**
+ * Steward's own: on, with this write's subject and text, compared with whitespace trimmed at both
+ * ends. The times are left out on purpose: Gmail may hand them back rounded, and Steward would then
+ * fail to recognise (and never turn off) its own auto-reply. The text carries the dates in words,
+ * so it is specific to the status.
+ */
 function isOurs(current: VacationSettings, args: ResponderWriteArgs): boolean {
   return (
     current.enableAutoReply &&
-    current.responseSubject === args.subject &&
-    current.responseBodyPlainText === args.body &&
-    current.startTime === args.startMs &&
-    current.endTime === args.endMs
+    current.responseSubject.trim() === args.subject.trim() &&
+    current.responseBodyPlainText.trim() === args.body.trim()
   );
 }
 

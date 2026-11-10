@@ -100,6 +100,31 @@ describe("GmailResponderConnector.perform", () => {
     expect(sets).toHaveLength(1);
   });
 
+  it("leaves an auto-reply with the same text but another subject alone", async () => {
+    const { fake, sets, connector } = await setup();
+    fake.vacation = { ...MINE, responseSubject: "Away" };
+    const before = { ...fake.vacation };
+    const err = await connector.perform(SPEC, ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(SkipWrite);
+    expect(err.reason).toBe(AUTO_REPLY_ALREADY_ON);
+    expect(fake.vacation).toEqual(before);
+    expect(sets).toEqual([]);
+  });
+
+  it("knows its own auto-reply although Gmail rounded the times and added a newline", async () => {
+    const { fake, sets, connector } = await setup();
+    fake.vacation = {
+      ...MINE,
+      responseBodyPlainText: `${ARGS.body}
+`,
+      startTime: ARGS.startMs + 123,
+      endTime: ARGS.endMs - 456,
+    };
+    const { externalId } = await connector.perform(SPEC, ctx);
+    expect(externalId).toBe(`${PERSON}:${ARGS.startMs}`);
+    expect(sets).toEqual([]);
+  });
+
   it("skips when Google is not connected", async () => {
     const { connector } = await setup({ connected: false });
     const err = await connector.perform(SPEC, ctx).catch((e) => e);
@@ -140,6 +165,27 @@ describe("GmailResponderConnector.undo", () => {
     expect(sets).toHaveLength(1);
     expect(fake.vacation.enableAutoReply).toBe(true);
     expect(fake.vacation.responseBodyPlainText).toBe("Changed by me");
+  });
+
+  it("does not touch an auto-reply with another subject", async () => {
+    const { fake, sets, connector } = await setup();
+    fake.vacation = { ...MINE, responseSubject: "Away" };
+    await connector.undo("x", SPEC, ctx);
+    expect(sets).toEqual([]);
+    expect(fake.vacation.enableAutoReply).toBe(true);
+  });
+
+  it("turns its own off although Gmail rounded the times, keeping restrict-to-domain", async () => {
+    const { fake, connector } = await setup();
+    fake.vacation = {
+      ...MINE,
+      startTime: ARGS.startMs + 1000,
+      endTime: ARGS.endMs + 1000,
+      restrictToDomain: true,
+    };
+    await connector.undo("x", SPEC, ctx);
+    expect(fake.vacation.enableAutoReply).toBe(false);
+    expect(fake.vacation.restrictToDomain).toBe(true);
   });
 
   it("does nothing when the auto-reply is already off", async () => {
