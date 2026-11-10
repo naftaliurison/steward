@@ -4,9 +4,9 @@ An AI colleague for Slack that acts in your work tools only on your yes, and sho
 
 Steward is one core — the Slack surface, connections to other tools, an act-with-receipt engine with Undo, scheduling, budgets, audit and evaluation — and products built on it.
 
-**Steward Availability** is the first, and it is being built: you will say once, in plain words, that you're out, travelling or working remotely, and it will set your Slack status, your Google calendars and your Gmail auto-reply — reviewable before it saves, reversible for five minutes after — and find a time for a group and book it with an agenda. Today it sets the Slack status, at once or from a first day in the future.
+**Steward Availability** is the first, and it is being built: you will say once, in plain words, that you're out, travelling or working remotely, and it will set your Slack status, your Google calendars and your Gmail auto-reply — reviewable before it saves, reversible for five minutes after — and find a time for a group and book it with an agenda. Today it sets the Slack status, at once or from a first day in the future. For a person who has connected Google, it also adds an out-of-office event to their main calendar and turns on their Gmail auto-reply, for "Out of office" and "Sick". Both are written when the status is saved, and Undo takes both back.
 
-Status: `/ooo` form → Slack status → receipt → Undo works end to end in Slack, and the same flow runs as a browser demo at `/try` against a pretend Slack. See Deploy below to run your own copy. The design is in [`docs/superpowers/specs/2026-11-08-steward-availability-design.md`](docs/superpowers/specs/2026-11-08-steward-availability-design.md); plans live in `docs/superpowers/plans/`.
+Status: `/ooo` form → Slack status → receipt → Undo works end to end in Slack, and the same flow runs as a browser demo at `/try` against a pretend Slack. `/ooo google` connects a Google account, and `/ooo google disconnect` takes the connection away. See Deploy below to run your own copy. The design is in [`docs/superpowers/specs/2026-11-08-steward-availability-design.md`](docs/superpowers/specs/2026-11-08-steward-availability-design.md); plans live in `docs/superpowers/plans/`.
 
 ## Develop
 
@@ -43,6 +43,25 @@ If something goes wrong:
 - Slack's create-app page shows a bot token, a user token and an app token: Steward needs none of them, only the three values under Basic Information → App Credentials.
 
 Rotating a secret: `pnpm exec wrangler secret put <NAME>` again. Rotating `TOKEN_KEY` invalidates every stored token (people reconnect).
+
+## Google (optional)
+
+Steward works with Slack only until this is done. It is done once by the account owner.
+
+1. **Google Cloud project.** At console.cloud.google.com create a project. Enable the *Google Calendar API* and the *Gmail API*.
+2. **Consent screen.** Under *Google Auth Platform* (the OAuth consent screen) choose user type *External*. Add these scopes: `openid`, `email`, `https://www.googleapis.com/auth/calendar.events`, `https://www.googleapis.com/auth/calendar.calendarlist.readonly`, `https://www.googleapis.com/auth/calendar.freebusy` and `https://www.googleapis.com/auth/gmail.settings.basic`. Add yourself, and anyone else who will try it, as test users.
+3. **OAuth client.** Create an OAuth client of type *Web application* with the authorised redirect URI `https://<host>/oauth/google/callback` (the same host as `APP_URL`).
+4. **Secrets.** From `apps/worker`: `pnpm exec wrangler secret put GOOGLE_CLIENT_ID` and `pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET`. They take effect without a redeploy. Until both are set, `/ooo google` answers that Google isn't set up, and nothing else changes.
+5. **Slack command hint.** Paste the current `apps/worker/slack-manifest.json` (with `APP_HOST` replaced) into the Slack app's *App Manifest* page, so `/ooo` shows its `google` hint.
+6. **Connect.** In Slack type `/ooo google` and follow the link. The link works for ten minutes.
+
+What to know:
+
+- While the consent screen is in *Testing*, Google ends each connection after seven days. The person runs `/ooo google` again. Publishing the app removes that.
+- The Gmail settings scope is one Google calls restricted. For your own account and your test users this needs nothing more. Offering it to the public needs Google's verification and a security assessment.
+- Steward writes to the main calendar only. Gmail has one auto-reply per account: if one is already on and is not Steward's, Steward leaves it alone and says so.
+- The connect link names the Slack person it belongs to. It is tied to that person, not to the browser that opens it, so do not pass your link to anyone else.
+- Steward stores the Google tokens sealed with `TOKEN_KEY`. `/ooo google disconnect` deletes them and asks Google to revoke them. Events and auto-replies Steward already set stay as they are.
 
 ## Licence
 

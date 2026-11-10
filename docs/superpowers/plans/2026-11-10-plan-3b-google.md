@@ -1204,9 +1204,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-## Tasks 3 to 11: design agreed, steps still to be written out
+## Tasks 3 to 11: the settled design
 
-> **Not ready to execute.** Tasks 1 and 2 above are complete. The tasks below are the settled design; each still needs its steps (failing test, code, commands, commit) written in the same format before an implementer starts.
+> Tasks 3 to 11 were built from this design, one task at a time, each from a written brief with its tests first and a review after. The briefs are working notes and are not kept in the repository; the commits on the branch are the record. The checks by hand are in [2026-11-10-plan-3b-hand-checks.md](2026-11-10-plan-3b-hand-checks.md).
 
 ### Task 3: Token source (`packages/core/src/google/tokens.ts`)
 
