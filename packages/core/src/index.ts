@@ -56,6 +56,8 @@ export {
   RealGoogleClient,
 } from "./google/client";
 export { FakeGoogleClient } from "./google/fake";
+export type { GoogleAccess } from "./google/tokens";
+export { ACCESS_TOKEN_MARGIN_MS, GoogleTokenSource } from "./google/tokens";
 export { newId } from "./ids";
 export * from "./slack/blocks";
 export type {
