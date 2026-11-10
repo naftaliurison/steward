@@ -1,5 +1,11 @@
-import { STATUS_MODAL_CALLBACK, UNDO_ACTION, zonedTimeToEpochMs } from "@steward/availability";
+import {
+  GOOGLE_HINT,
+  STATUS_MODAL_CALLBACK,
+  UNDO_ACTION,
+  zonedTimeToEpochMs,
+} from "@steward/availability";
 import { type Block, schema } from "@steward/core";
+import { seedGoogleConnection } from "@steward/core/testing";
 import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
@@ -417,5 +423,74 @@ describe("/ooo", () => {
       response_action: "errors",
       errors: { to: "The last day has already passed." },
     });
+  });
+});
+
+describe("/ooo with Google", () => {
+  let deps: TestDeps;
+  let app: ReturnType<typeof createApp>;
+
+  const save = async (type: string) => {
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type, from: "2026-11-12", to: "2026-11-17" })),
+    });
+    await flush(deps);
+    return deps.slack.responses.at(-1);
+  };
+  const press = async (statusId: string | undefined) => {
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({
+        type: "block_actions",
+        team: { id: "T1" },
+        user: { id: "U_DANA", username: "dana" },
+        response_url: RESPONSE_URL,
+        actions: [{ action_id: UNDO_ACTION, value: statusId }],
+      }),
+    });
+    await flush(deps);
+  };
+
+  beforeEach(() => {
+    deps = testDeps();
+    app = createApp(deps);
+  });
+
+  it("writes a calendar event and turns the auto-reply on for a connected person, and Undo reverses both", async () => {
+    const person = await seedWorkspace(deps);
+    await seedGoogleConnection(deps.db, deps.tokenKey, {
+      personId: person.id,
+      workspaceId: "T1",
+    });
+    const receipt = await save("out");
+    expect(deps.google.inserts).toHaveLength(1);
+    expect(deps.google.vacation.enableAutoReply).toBe(true);
+    const card = JSON.stringify(receipt?.blocks);
+    expect(card).toContain("Calendar event added");
+    expect(card).toContain("Gmail auto-reply on");
+
+    await press(undoValue(receipt?.blocks ?? []));
+    expect(deps.google.events.size).toBe(0);
+    expect(deps.google.vacation.enableAutoReply).toBe(false);
+  });
+
+  it("tells a person without Google how to connect it", async () => {
+    await seedWorkspace(deps);
+    const receipt = await save("out");
+    expect(JSON.stringify(receipt?.blocks)).toContain(GOOGLE_HINT);
+    expect(deps.google.inserts).toHaveLength(0);
+  });
+
+  it("does not mention Google while the OAuth client is not set", async () => {
+    deps = testDeps({ googleClientId: null });
+    app = createApp(deps);
+    await seedWorkspace(deps);
+    const receipt = await save("out");
+    expect(JSON.stringify(receipt?.blocks)).not.toContain("run /ooo google");
+  });
+
+  it("does not hint for a status that has nothing to do with Google", async () => {
+    await seedWorkspace(deps);
+    const receipt = await save("remote");
+    expect(JSON.stringify(receipt?.blocks)).not.toContain("run /ooo google");
   });
 });

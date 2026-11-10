@@ -1,11 +1,5 @@
+import { formatRange, STATUS_LABEL, type StatusType } from "@steward/availability";
 import {
-  formatRange,
-  SlackStatusConnector,
-  STATUS_LABEL,
-  type StatusType,
-} from "@steward/availability";
-import {
-  ConnectorRegistry,
   executeTargets,
   MAX_ATTEMPTS,
   open,
@@ -18,8 +12,12 @@ import {
 import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { cleanupDemoSessions } from "./demo/session";
 import type { Deps } from "./deps";
+import { registryFor } from "./registry";
 
-export type TickDeps = Pick<Deps, "db" | "now" | "slack" | "tokenKey">;
+export type TickDeps = Pick<
+  Deps,
+  "db" | "now" | "slack" | "tokenKey" | "google" | "googleClientId" | "googleClientSecret"
+>;
 /** Which statuses a run looks at: one workspace, or (with no id) every workspace that is not a demo. */
 export type TickScope = { workspaceId?: string };
 export type TickLimits = { starts: number; retries: number };
@@ -50,9 +48,6 @@ const inScope = (scope: TickScope) =>
   scope.workspaceId !== undefined
     ? eq(schema.statuses.workspaceId, scope.workspaceId)
     : sql`substr(${schema.statuses.workspaceId}, 1, 5) <> 'demo:'`;
-
-const registryFor = (deps: TickDeps) =>
-  new ConnectorRegistry().register(new SlackStatusConnector(deps.slack));
 
 const labelOf = (status: StatusRow): string =>
   STATUS_LABEL[status.type as StatusType] ?? status.type;

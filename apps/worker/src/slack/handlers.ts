@@ -2,7 +2,6 @@ import {
   buildStatusModal,
   readStatusSubmission,
   resultCard,
-  SlackStatusConnector,
   STATUS_MODAL_CALLBACK,
   saveStatus,
   scheduledStatusesFor,
@@ -10,15 +9,10 @@ import {
   UNDO_ACTION,
   undoStatus,
 } from "@steward/availability";
-import {
-  ConnectorRegistry,
-  getWorkspace,
-  open,
-  type PersonRow,
-  targetsForStatus,
-} from "@steward/core";
+import { getWorkspace, open, type PersonRow, targetsForStatus } from "@steward/core";
 import type { Deps } from "../deps";
 import { personForSlackUser } from "../people";
+import { googleConfigured, registryFor } from "../registry";
 import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } from "../slackTypes";
 
 export const SAVE_FAILED = "Your status didn't save. Please try again in a moment.";
@@ -114,8 +108,9 @@ export async function handleInteraction(
   if (!workspace) return { kind: "text", body: "" };
   const availability = {
     db: deps.db,
-    registry: new ConnectorRegistry().register(new SlackStatusConnector(deps.slack)),
+    registry: registryFor(deps),
     now: deps.now,
+    googleHint: googleConfigured(deps) && !workspace.id.startsWith("demo:"),
   };
   // Slack wants view_submission and block_actions answered within 3 seconds, so the work runs after the answer.
   const tellUser = async (responseUrl: string | undefined, text: string) => {

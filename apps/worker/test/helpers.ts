@@ -1,6 +1,7 @@
 import {
   type Db,
   ensurePerson,
+  FakeGoogleClient,
   FakeSlackClient,
   newKeyB64,
   type PersonRow,
@@ -22,17 +23,23 @@ export const TZ = "Asia/Jerusalem";
 export type TestDeps = Deps & {
   db: Db;
   slack: FakeSlackClient;
+  google: FakeGoogleClient;
   tokenKey: string;
   clock: { now: number };
   deferred: Promise<unknown>[];
 };
 
-export function testDeps(overrides: Partial<Omit<Deps, "slack" | "db" | "defer">> = {}): TestDeps {
+export function testDeps(
+  overrides: Partial<Omit<Deps, "slack" | "google" | "db" | "defer">> = {},
+): TestDeps {
   const clock = { now: NOW };
   const deferred: Promise<unknown>[] = [];
   return {
     db: createTestDb(),
     slack: new FakeSlackClient(),
+    google: new FakeGoogleClient(),
+    googleClientId: "google-client-id",
+    googleClientSecret: "google-client-secret",
     tokenKey: newKeyB64(),
     fetchFn: fetch,
     now: () => clock.now,
