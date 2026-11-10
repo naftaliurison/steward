@@ -6,6 +6,7 @@ import {
 } from "@steward/availability";
 import {
   type Block,
+  deleteGoogleConnection,
   ensurePerson,
   schema,
   seal,
@@ -478,6 +479,54 @@ describe("/ooo with Google", () => {
     await press(undoValue(receipt?.blocks ?? []));
     expect(deps.google.events.size).toBe(0);
     expect(deps.google.vacation.enableAutoReply).toBe(false);
+  });
+
+  it("Undo still goes through after Google was disconnected, and the card says what was left", async () => {
+    const person = await seedWorkspace(deps);
+    await seedGoogleConnection(deps.db, deps.tokenKey, {
+      personId: person.id,
+      workspaceId: "T1",
+    });
+    const receipt = await save("out");
+    expect(deps.google.inserts).toHaveLength(1);
+    await deleteGoogleConnection(deps.db, person.id);
+
+    await press(undoValue(receipt?.blocks ?? []));
+    expect(deps.slack.statuses.get("xoxp-dana")).toBeNull();
+    const status = (await deps.db.select().from(schema.statuses))[0];
+    expect(status?.state).toBe("cancelled");
+    const card = deps.slack.responses.at(-1);
+    expect(card?.text).toMatch(/^Undone · /);
+    const text = JSON.stringify(card?.blocks);
+    expect(text).toContain("Slack status cleared");
+    expect(text).toContain("Calendar event left in place: Google isn't connected");
+    expect(text).toContain("Gmail auto-reply left in place: Google isn't connected");
+    expect(deps.google.events.size).toBe(1);
+    expect(deps.google.vacation.enableAutoReply).toBe(true);
+  });
+
+  it("cancelling a scheduled status goes through after Google was disconnected", async () => {
+    const person = await seedWorkspace(deps);
+    await seedGoogleConnection(deps.db, deps.tokenKey, {
+      personId: person.id,
+      workspaceId: "T1",
+    });
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-14", to: "2026-11-17" })),
+    });
+    await flush(deps);
+    const receipt = deps.slack.responses.at(-1);
+    expect(receipt?.text).toMatch(/^Scheduled · /);
+    await deleteGoogleConnection(deps.db, person.id);
+
+    await press(undoValue(receipt?.blocks ?? []));
+    const status = (await deps.db.select().from(schema.statuses))[0];
+    expect(status?.state).toBe("cancelled");
+    const card = deps.slack.responses.at(-1);
+    expect(card?.text).toMatch(/^Cancelled · /);
+    const text = JSON.stringify(card?.blocks);
+    expect(text).toContain("Calendar event left in place: Google isn't connected");
+    expect(text).toContain("Gmail auto-reply left in place: Google isn't connected");
   });
 
   it("tells a person without Google how to connect it", async () => {

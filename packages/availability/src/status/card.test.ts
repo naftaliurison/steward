@@ -174,6 +174,42 @@ describe("resultCard", () => {
       );
     });
 
+    it("says what an Undo left in place, and why", () => {
+      const lines = (state: string, system: string, err: string | null) =>
+        textOf(
+          resultCard({ status, targets: [sys(system, state, err)], tz: "Asia/Jerusalem", now }),
+          1,
+        );
+      expect(lines("undone", "google-calendar", "Google isn't connected")).toBe(
+        "↩️ Calendar event left in place: Google isn't connected",
+      );
+      expect(lines("undone", "gmail-responder", "Google isn't connected")).toBe(
+        "↩️ Gmail auto-reply left in place: Google isn't connected",
+      );
+      // An undone target with no reason (a pending one the engine retired) reads as before.
+      expect(lines("undone", "google-calendar", null)).toBe("↩️ Calendar event removed");
+      expect(lines("undone", "slack-status", null)).toBe("↩️ Slack status cleared");
+    });
+
+    it("shows the reason of a failed Undo after the normal line of a done target", () => {
+      const lines = (system: string) =>
+        textOf(
+          resultCard({
+            status,
+            targets: [sys(system, "done", "undo didn't go through — rate limited")],
+            tz: "Asia/Jerusalem",
+            now,
+          }),
+          1,
+        );
+      expect(lines("google-calendar")).toBe(
+        `✅ Calendar event added — ${range} — undo didn't go through — rate limited`,
+      );
+      expect(lines("slack-status")).toBe(
+        "✅ Slack status set — clears Tue 17 Nov — undo didn't go through — rate limited",
+      );
+    });
+
     it("adds each note as a context block after the lines and before the buttons", () => {
       const card = resultCard({
         status,

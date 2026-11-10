@@ -150,10 +150,10 @@ describe("GoogleCalendarConnector.undo", () => {
     expect(fake.events.size).toBe(0);
   });
 
-  it("rejects with a plain message when there is no connection", async () => {
+  it("skips an undo with a reason when there is no connection", async () => {
     const { connector } = await setup(false);
-    await expect(connector.undo("stwabc", specFor([PRIMARY]), ctx)).rejects.toThrow(
-      "Google isn't connected — the calendar event was left in place",
-    );
+    const err = await connector.undo("stwabc", specFor([PRIMARY]), ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(SkipWrite);
+    expect((err as SkipWrite).reason).toBe("Google isn't connected");
   });
 });

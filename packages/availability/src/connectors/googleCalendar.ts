@@ -6,6 +6,7 @@ import {
   type GoogleClient,
   type GoogleEventInput,
   type GoogleTokenSource,
+  SkipWrite,
   type WriteSpec,
 } from "@steward/core";
 import { type CalendarWriteArgs, GOOGLE_CALENDAR } from "../status/plan";
@@ -94,8 +95,7 @@ export class GoogleCalendarConnector implements Connector {
 
   async undo(externalId: string, spec: WriteSpec, ctx: ConnectorCtx): Promise<void> {
     const access = await this.tokens.accessFor(ctx.personId);
-    if (!access.ok)
-      throw new Error("Google isn't connected — the calendar event was left in place");
+    if (!access.ok) throw new SkipWrite("Google isn't connected");
     const { calendars } = spec.args as CalendarWriteArgs;
     for (const calendar of calendars) {
       await expiringOn401(this.tokens, ctx.personId, () =>

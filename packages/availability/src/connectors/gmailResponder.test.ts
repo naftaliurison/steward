@@ -194,10 +194,10 @@ describe("GmailResponderConnector.undo", () => {
     expect(sets).toEqual([]);
   });
 
-  it("says so when Google is not connected", async () => {
+  it("skips an undo with a reason when Google is not connected", async () => {
     const { connector } = await setup({ connected: false });
-    await expect(connector.undo("x", SPEC, ctx)).rejects.toThrow(
-      "Google isn't connected — the Gmail auto-reply was left as it is",
-    );
+    const err = await connector.undo("x", SPEC, ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(SkipWrite);
+    expect((err as SkipWrite).reason).toBe("Google isn't connected");
   });
 });

@@ -42,6 +42,18 @@ function titlePrefix(status: StatusRow): string {
 /** One line per system write, in the words the spec uses: done, didn't go through, skipped, cleared, pending. */
 export function targetLine(target: TargetRow, status: StatusRow, tz: string): string {
   const name = SYSTEM_NAME[target.system] ?? target.system;
+  // An Undo that could not reverse the write, and says why (Google was disconnected).
+  if (target.state === "undone" && target.lastError !== null) {
+    return `↩️ ${name.charAt(0).toUpperCase()}${name.slice(1)} left in place: ${target.lastError}`;
+  }
+  const line = baseLine(target, status, tz, name);
+  // A done target that carries a reason is one whose Undo failed for a passing reason.
+  return target.state === "done" && target.lastError !== null
+    ? `${line} — ${target.lastError}`
+    : line;
+}
+
+function baseLine(target: TargetRow, status: StatusRow, tz: string, name: string): string {
   const google = GOOGLE_LINES[target.system];
   if (google) {
     switch (target.state) {

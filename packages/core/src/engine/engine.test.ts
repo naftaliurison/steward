@@ -27,7 +27,7 @@ class RecordingConnector implements Connector {
   keysSeen: { op: "perform" | "undo"; key: string }[] = [];
   constructor(
     readonly system: string,
-    private readonly behaviour: "ok" | "fail" | "skip" | "undoFails" = "ok",
+    private readonly behaviour: "ok" | "fail" | "skip" | "undoFails" | "undoSkips" = "ok",
   ) {}
   async perform(spec: WriteSpec, ctx: ConnectorCtx): Promise<{ externalId: string }> {
     this.keysSeen.push({ op: "perform", key: ctx.idempotencyKey });
@@ -39,6 +39,7 @@ class RecordingConnector implements Connector {
   async undo(externalId: string, _spec: WriteSpec, ctx: ConnectorCtx): Promise<void> {
     this.keysSeen.push({ op: "undo", key: ctx.idempotencyKey });
     if (this.behaviour === "undoFails") throw new Error("remote said no");
+    if (this.behaviour === "undoSkips") throw new SkipWrite("not connected any more");
     this.undone.push(externalId);
   }
 }
@@ -199,6 +200,17 @@ describe("engine", () => {
     expect(after?.lastError?.startsWith("undo didn't go through — remote said no")).toBe(true);
     const rows = await db.select().from(audit).where(eq(audit.action, "a.set.undo"));
     expect(rows.map((r) => r.result)).toEqual(["undo_failed"]);
+  });
+
+  it("records an undo that throws SkipWrite as undone, with the reason", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a", "undoSkips"));
+    const created = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    const done = await executeTargets(db, registry, ctx, created, now);
+    const [after] = await undoTargets(db, registry, ctx, done, now);
+    expect(after?.state).toBe("undone");
+    expect(after?.lastError).toBe("not connected any more");
+    const rows = await db.select().from(audit).where(eq(audit.action, "a.set.undo"));
+    expect(rows.map((r) => r.result)).toEqual(["undone"]);
   });
 
   it("keeps a target done and audits undo_failed when no connector is registered for undo", async () => {

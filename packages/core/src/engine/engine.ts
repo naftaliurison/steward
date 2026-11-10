@@ -260,8 +260,13 @@ export async function undoTargets(
         });
         patch = { state: "undone", lastError: null };
       } catch (err) {
-        result = "undo_failed";
-        patch = { state: "done", lastError: `undo didn't go through — ${errorMessage(err)}` };
+        if (err instanceof SkipWrite) {
+          // Nothing to reverse any more (Google was disconnected): the undo is done, and the reason says what was left.
+          patch = { state: "undone", lastError: err.reason };
+        } else {
+          result = "undo_failed";
+          patch = { state: "done", lastError: `undo didn't go through — ${errorMessage(err)}` };
+        }
       }
     }
     await record(db, ctx, target, action, patch, now(), result);

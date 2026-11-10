@@ -78,8 +78,7 @@ export class GmailResponderConnector implements Connector {
   async undo(_externalId: string, spec: WriteSpec, ctx: ConnectorCtx): Promise<void> {
     const args = spec.args as ResponderWriteArgs;
     const access = await this.tokens.accessFor(ctx.personId);
-    if (!access.ok)
-      throw new Error("Google isn't connected — the Gmail auto-reply was left as it is");
+    if (!access.ok) throw new SkipWrite("Google isn't connected");
     const current = await expiringOn401(this.tokens, ctx.personId, () =>
       this.google.getVacation({ accessToken: access.accessToken }),
     );
