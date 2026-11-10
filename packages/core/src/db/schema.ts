@@ -93,10 +93,36 @@ export const audit = sqliteTable(
   (t) => [index("audit_workspace_idx").on(t.workspaceId)],
 );
 
+/** One row per person who connected Google. Both tokens are sealed with TOKEN_KEY. */
+export const googleConnections = sqliteTable(
+  "google_connections",
+  {
+    /** The same id as `people.id`. */
+    personId: text("person_id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    /** The Google account's address, shown to the person; "" when Google did not say. */
+    email: text("email").notNull(),
+    refreshTokenSealed: text("refresh_token_sealed").notNull(),
+    /** Null until the first refresh, and after Google refused the stored one. */
+    accessTokenSealed: text("access_token_sealed"),
+    accessExpiresAt: integer("access_expires_at"),
+    /** The scopes Google granted, separated by spaces. */
+    scopes: text("scopes").notNull(),
+    /** JSON: `GoogleCalendar[]` — every calendar the person can write to, and which ones Steward writes. */
+    calendars: text("calendars").notNull(),
+    /** ok | revoked */
+    health: text("health").notNull(),
+    connectedAt: integer("connected_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [index("google_connections_workspace_idx").on(t.workspaceId)],
+);
+
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 export type PersonRow = typeof people.$inferSelect;
 export type StatusRow = typeof statuses.$inferSelect;
 export type TargetRow = typeof statusTargets.$inferSelect;
+export type GoogleConnectionRow = typeof googleConnections.$inferSelect;
 
 /** A visitor's hour in the demo. `id` is random; the workspace it owns is `demo:<id>`. */
 export const demoSessions = sqliteTable("demo_sessions", {

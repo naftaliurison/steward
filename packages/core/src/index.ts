@@ -1,17 +1,27 @@
 export { newKeyB64, open, seal } from "./crypto/seal";
 export type { Db } from "./db/client";
+export type { GoogleCalendar } from "./db/repo";
 export {
+  calendarsOf,
+  deleteGoogleConnection,
   ensurePerson,
+  GOOGLE_SCOPE,
+  getGoogleConnection,
   getPerson,
   getWorkspace,
+  hasGoogleScope,
   personId,
+  setGoogleAccessToken,
+  setGoogleHealth,
   setPersonUserToken,
   updatePersonProfile,
+  upsertGoogleConnection,
   upsertWorkspace,
 } from "./db/repo";
 export type {
   DemoEventRow,
   DemoSessionRow,
+  GoogleConnectionRow,
   PersonRow,
   StatusRow,
   TargetRow,
