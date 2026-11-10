@@ -104,10 +104,13 @@ function isRealDate(d: string): boolean {
 /** The furthest ahead a status may start. */
 export const MAX_DAYS_AHEAD = 365;
 
-const lastFirstDay = (today: string): string =>
-  new Date(Date.parse(`${today}T00:00:00Z`) + MAX_DAYS_AHEAD * 86_400_000)
-    .toISOString()
-    .slice(0, 10);
+/** The furthest ahead a status may end. */
+export const MAX_LAST_DAY_AHEAD = 730;
+
+const daysAfter = (today: string, days: number): string =>
+  new Date(Date.parse(`${today}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
+const lastFirstDay = (today: string): string => daysAfter(today, MAX_DAYS_AHEAD);
 
 /**
  * Reads the submitted form. `today` is the person's local date: the first day may be today, earlier,
@@ -132,6 +135,8 @@ export function readStatusSubmission(view: SubmittedView, opts: { today: string 
   else if (to < opts.today) errors[FIELD.to] = "The last day has already passed.";
   else if (DATE.test(from) && to < from)
     errors[FIELD.to] = "The last day can't be before the first";
+  else if (to > daysAfter(opts.today, MAX_LAST_DAY_AHEAD))
+    errors[FIELD.to] = "Pick a last day within the next two years.";
   if (rawText.length > MAX_TEXT) errors[FIELD.text] = "Keep the status text under 100 characters.";
   if (rawEmoji.length > MAX_EMOJI) errors[FIELD.emoji] = "That emoji name is too long.";
   else if (rawEmoji && !EMOJI.test(rawEmoji))

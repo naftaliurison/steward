@@ -5,14 +5,24 @@ export {
   buildStatusModal,
   FIELD,
   MAX_DAYS_AHEAD,
+  MAX_LAST_DAY_AHEAD,
   readStatusSubmission,
   STATUS_MODAL_CALLBACK,
 } from "./status/form";
-export { planWrites, SLACK_STATUS } from "./status/plan";
+export type { CalendarWriteArgs, ResponderWriteArgs } from "./status/plan";
+export {
+  GMAIL_RESPONDER,
+  GOOGLE_CALENDAR,
+  GOOGLE_TYPES,
+  planWrites,
+  SLACK_STATUS,
+  writesAtSave,
+} from "./status/plan";
 export type { AvailabilityDeps, SaveResult } from "./status/service";
 export {
   activeStatusFor,
   CANCEL_TOO_LATE,
+  GOOGLE_HINT,
   getStatus,
   RECOVERY_DELAY_MS,
   saveStatus,
@@ -20,6 +30,7 @@ export {
   UNDO_WINDOW_MS,
   undoStatus,
 } from "./status/service";
+export { autoReply } from "./status/templates";
 export {
   formatDay,
   formatRange,

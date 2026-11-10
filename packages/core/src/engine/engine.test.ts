@@ -92,6 +92,30 @@ describe("engine", () => {
     expect(await targetsForStatus(db, "S1")).toHaveLength(2);
   });
 
+  it("takes the recovery time from a function, once per spec", async () => {
+    const seen: string[] = [];
+    const targets = await createTargets(
+      db,
+      "S1",
+      [
+        { system: "a", op: "set", args: {} },
+        { system: "b", op: "set", args: {} },
+        { system: "c", op: "set", args: {} },
+      ],
+      (spec) => {
+        seen.push(spec.system);
+        return spec.system === "a" ? 100 : spec.system === "b" ? null : 300;
+      },
+    );
+    expect(seen).toEqual(["a", "b", "c"]);
+    expect(targets.map((t) => t.nextAttemptAt)).toEqual([100, null, 300]);
+    expect((await targetsForStatus(db, "S1")).map((t) => t.nextAttemptAt)).toEqual([
+      100,
+      null,
+      300,
+    ]);
+  });
+
   it("runs each target independently and records honest states", async () => {
     const a = new RecordingConnector("a");
     const registry = new ConnectorRegistry()
