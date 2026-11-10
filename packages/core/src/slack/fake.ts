@@ -1,6 +1,7 @@
 import type { ModalView } from "./blocks";
 import {
   assertTrustedResponseUrl,
+  type PostMessageArgs,
   type RespondArgs,
   type SetStatusArgs,
   SlackApiError,
@@ -14,6 +15,7 @@ export type FakeStatus = { text: string; emoji: string; expiration: number };
 export class FakeSlackClient implements SlackClient {
   openedViews: { triggerId: string; view: ModalView }[] = [];
   responses: RespondArgs[] = [];
+  messages: PostMessageArgs[] = [];
   statuses = new Map<string, FakeStatus | null>();
   /** Seed with `users.set(slackUserId, { displayName, tz })`; unknown users answer null like Slack does. */
   users = new Map<string, UserProfile>();
@@ -57,6 +59,11 @@ export class FakeSlackClient implements SlackClient {
   async clearUserStatus(args: { userToken: string }): Promise<void> {
     this.maybeFail("clearUserStatus");
     this.statuses.set(args.userToken, null);
+  }
+
+  async postMessage(args: PostMessageArgs): Promise<void> {
+    this.maybeFail("postMessage");
+    this.messages.push(args);
   }
 
   async getUserInfo(args: { botToken: string; userId: string }): Promise<UserProfile | null> {

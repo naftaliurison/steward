@@ -20,6 +20,17 @@ describe("FakeSlackClient", () => {
     expect(slack.statuses.get("xoxp-dana")).toBeNull();
   });
 
+  it("records messages and can fail the next one", async () => {
+    const slack = new FakeSlackClient();
+    await slack.postMessage({ botToken: "xoxb", channel: "U1", text: "hello" });
+    expect(slack.messages).toEqual([{ botToken: "xoxb", channel: "U1", text: "hello" }]);
+    slack.failNext.postMessage = "channel_not_found";
+    await expect(
+      slack.postMessage({ botToken: "xoxb", channel: "U1", text: "again" }),
+    ).rejects.toThrow("channel_not_found");
+    expect(slack.messages).toHaveLength(1);
+  });
+
   it("fails the next call of a method once when asked", async () => {
     const slack = new FakeSlackClient();
     slack.failNext.setUserStatus = "ratelimited";

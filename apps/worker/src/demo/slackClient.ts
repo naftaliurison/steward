@@ -4,6 +4,7 @@ import {
   type DemoEventRow,
   type ModalView,
   newId,
+  type PostMessageArgs,
   type RespondArgs,
   type SetStatusArgs,
   type SlackClient,
@@ -21,7 +22,7 @@ const userOf = (userToken: string): string =>
     ? userToken.slice(DEMO_USER_TOKEN_PREFIX.length)
     : "unknown";
 
-export type DemoEventKind = "view" | "response" | "status";
+export type DemoEventKind = "view" | "response" | "status" | "message";
 
 /**
  * The demo's Slack: every call becomes a `demo_events` row the emulator reads back.
@@ -86,6 +87,15 @@ export class DemoSlackClient implements SlackClient {
 
   async clearUserStatus(args: { userToken: string }): Promise<void> {
     await this.record("status", { slackUserId: userOf(args.userToken), status: null });
+  }
+
+  /** The recorded message names where it went and never carries the token. */
+  async postMessage(args: PostMessageArgs): Promise<void> {
+    await this.record("message", {
+      channel: args.channel,
+      text: args.text,
+      blocks: args.blocks ?? [],
+    });
   }
 
   /** Demo people are seeded with their profile already synced, so this is not reached in practice. */

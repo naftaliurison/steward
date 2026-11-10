@@ -110,7 +110,7 @@ export const demoSessions = sqliteTable("demo_sessions", {
   actionsUsed: integer("actions_used").notNull().default(0),
 });
 
-/** Everything the fake Slack was asked to do, in order: `view` (views.open), `response` (response_url post), `status` (profile status set or cleared). */
+/** Everything the fake Slack was asked to do, in order: `view` (views.open), `response` (response_url post), `status` (profile status set or cleared), `message` (chat.postMessage). */
 export const demoEvents = sqliteTable(
   "demo_events",
   {

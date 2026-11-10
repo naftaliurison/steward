@@ -22,6 +22,12 @@ export type DemoEvent =
       kind: "status";
       at: number;
       payload: { slackUserId: string; status: SlackStatus | null };
+    }
+  | {
+      seq: number;
+      kind: "message";
+      at: number;
+      payload: { channel: string; text: string; blocks: Block[] };
     };
 export type DemoState = {
   now: number;

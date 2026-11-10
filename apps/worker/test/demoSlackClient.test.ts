@@ -106,4 +106,17 @@ describe("DemoSlackClient", () => {
         .values({ id: newId(), sessionId: "A", seq: 2, kind: "status", payload: "{}", at: 1 }),
     ).rejects.toThrow();
   });
+
+  it("records a message without the token that sent it", async () => {
+    const db = createTestDb();
+    const slack = new DemoSlackClient(db, "S1", () => 1);
+    await slack.postMessage({ botToken: "xoxb-demo", channel: "U_DANA", text: "hello" });
+    const events = await readDemoEvents(db, "S1");
+    expect(events.map((e) => e.kind)).toEqual(["message"]);
+    expect(JSON.parse(events[0]?.payload ?? "{}")).toEqual({
+      channel: "U_DANA",
+      text: "hello",
+      blocks: [],
+    });
+  });
 });

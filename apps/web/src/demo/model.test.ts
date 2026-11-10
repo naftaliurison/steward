@@ -80,6 +80,23 @@ describe("deriveScreen", () => {
   });
 });
 
+describe("deriveScreen messages", () => {
+  it("shows a message Steward sent, in the thread, and never mistakes it for a status", () => {
+    const events: DemoEvent[] = [
+      response(1, "receipt"),
+      {
+        seq: 2,
+        kind: "message",
+        at: 2000,
+        payload: { channel: "U_DANA", text: "heads up", blocks: [] },
+      },
+    ];
+    const screen = deriveScreen({ now: 0, events }, none);
+    expect(screen.messages.map((m) => `${m.seq}:${m.text}`)).toEqual(["1:receipt", "2:heads up"]);
+    expect(screen.statuses).toEqual({});
+  });
+});
+
 describe("thread", () => {
   it("puts each notice after the message that was newest when it appeared", () => {
     const messages = [

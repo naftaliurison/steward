@@ -16,6 +16,9 @@ export type SetStatusArgs = {
   expiration: number;
 };
 
+/** `channel` is a channel id, or a user id to reach the person in the app's direct messages. */
+export type PostMessageArgs = { botToken: string; channel: string; text: string; blocks?: Block[] };
+
 /** `tz` is null when the Slack user has none set. */
 export type UserProfile = { displayName: string; tz: string | null };
 
@@ -40,6 +43,8 @@ export interface SlackClient {
   clearUserStatus(args: { userToken: string }): Promise<void>;
   /** The person's display name and IANA time zone, or null when Slack doesn't know the user. */
   getUserInfo(args: { botToken: string; userId: string }): Promise<UserProfile | null>;
+  /** Sends a message as the app. Needs the bot scope `chat:write`. */
+  postMessage(args: PostMessageArgs): Promise<void>;
 }
 
 export class SlackApiError extends Error {
@@ -145,6 +150,14 @@ export class RealSlackClient implements SlackClient {
   async clearUserStatus(args: { userToken: string }): Promise<void> {
     await this.call("users.profile.set", args.userToken, {
       profile: { status_text: "", status_emoji: "", status_expiration: 0 },
+    });
+  }
+
+  async postMessage(args: PostMessageArgs): Promise<void> {
+    await this.call("chat.postMessage", args.botToken, {
+      channel: args.channel,
+      text: args.text,
+      blocks: args.blocks,
     });
   }
 
