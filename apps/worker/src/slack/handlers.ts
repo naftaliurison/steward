@@ -14,6 +14,7 @@ import type { Deps } from "../deps";
 import { personForSlackUser } from "../people";
 import { googleConfigured, registryFor } from "../registry";
 import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } from "../slackTypes";
+import { googleCommandOf, googleDisconnectText, googleStatusText } from "./googleCommand";
 
 export const SAVE_FAILED = "Your status didn't save. Please try again in a moment.";
 export const UNDO_FAILED = "Undo didn't go through. Please try again in a moment.";
@@ -68,6 +69,17 @@ export async function handleSlashCommand(deps: Deps, form: URLSearchParams): Pro
       userId,
       form.get("user_name") ?? userId,
     );
+    const cmd = googleCommandOf(form.get("text") ?? "");
+    if (cmd !== null) {
+      try {
+        return cmd === "google"
+          ? await googleStatusText(deps, person)
+          : await googleDisconnectText(deps, person);
+      } catch {
+        console.error("could not answer /ooo google", { person: person.id });
+        return "Steward couldn't do that just now. Please try again.";
+      }
+    }
     await deps.slack.openView({
       botToken,
       triggerId: form.get("trigger_id") ?? "",
