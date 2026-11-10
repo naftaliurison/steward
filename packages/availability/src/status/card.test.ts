@@ -18,7 +18,11 @@ const status: StatusRow = {
   undoUntilMs: now + 300_000,
   replacedStatusId: null,
 };
-const target = (state: string, lastError: string | null = null): TargetRow => ({
+const target = (
+  state: string,
+  lastError: string | null = null,
+  nextAttemptAt: number | null = null,
+): TargetRow => ({
   id: "G1",
   statusId: "S1",
   system: "slack-status",
@@ -28,6 +32,7 @@ const target = (state: string, lastError: string | null = null): TargetRow => ({
   externalId: null,
   attempts: 1,
   lastError,
+  nextAttemptAt,
   idempotencyKey: "S1:slack-status:set",
 });
 

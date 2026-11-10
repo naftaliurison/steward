@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { audit, statusTargets, type TargetRow } from "../db/schema";
 import { newId } from "../ids";
@@ -6,24 +6,46 @@ import { type ActorCtx, type ConnectorRegistry, SkipWrite, type WriteSpec } from
 
 export type TargetState = "pending" | "done" | "failed" | "skipped" | "undone";
 
+/** A write is tried this many times in all before Steward gives up and tells the person. */
+export const MAX_ATTEMPTS = 6;
+const FIRST_RETRY_MS = 60_000;
+
+/** When a write that has failed `attempts` times is tried again: 1, 2, 4, 8, 16 minutes later. Null once it has used every try. */
+export function nextAttemptAfter(attempts: number, at: number): number | null {
+  return attempts >= MAX_ATTEMPTS ? null : at + FIRST_RETRY_MS * 2 ** (attempts - 1);
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The rows for these ids, in the order the ids were given. */
 async function targetsById(db: Db, ids: string[]): Promise<TargetRow[]> {
   if (ids.length === 0) return [];
-  return db.select().from(statusTargets).where(inArray(statusTargets.id, ids));
+  const rows = await db.select().from(statusTargets).where(inArray(statusTargets.id, ids));
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
 }
 
+/** A status's targets, always in the same order (system, then op), so its card reads the same every time. */
 export async function targetsForStatus(db: Db, statusId: string): Promise<TargetRow[]> {
-  return db.select().from(statusTargets).where(eq(statusTargets.statusId, statusId));
+  return db
+    .select()
+    .from(statusTargets)
+    .where(eq(statusTargets.statusId, statusId))
+    .orderBy(statusTargets.system, statusTargets.op);
 }
 
-/** One pending row per write. The idempotency key is stable across retries of the same status. */
+/**
+ * One pending row per write. The idempotency key is stable across retries of the same status.
+ * `recoverAt` is when the tick may pick the row up if it is still pending then (the work that
+ * should have run it never finished).
+ */
 export async function createTargets(
   db: Db,
   statusId: string,
   specs: WriteSpec[],
+  recoverAt: number | null = null,
 ): Promise<TargetRow[]> {
   const rows: TargetRow[] = specs.map((spec) => ({
     id: newId(),
@@ -35,6 +57,7 @@ export async function createTargets(
     externalId: null,
     attempts: 0,
     lastError: null,
+    nextAttemptAt: recoverAt,
     idempotencyKey: `${statusId}:${spec.system}:${spec.op}`,
   }));
   if (rows.length > 0) await db.insert(statusTargets).values(rows);
@@ -43,6 +66,11 @@ export async function createTargets(
 
 type Patch = { state: TargetState; externalId?: string | null; lastError: string | null };
 
+/**
+ * Writes a target's new state and its audit row. The update only lands if the row is still as
+ * it was read (same state, same number of attempts); if something else changed it meanwhile,
+ * nothing is written and the answer is false.
+ */
 async function record(
   db: Db,
   ctx: ActorCtx,
@@ -51,33 +79,47 @@ async function record(
   patch: Patch,
   at: number,
   result: TargetState | "undo_failed" = patch.state,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const attempts = target.attempts + 1;
+  const updated = await db
     .update(statusTargets)
-    .set({ ...patch, attempts: target.attempts + 1 })
-    .where(eq(statusTargets.id, target.id));
+    .set({
+      ...patch,
+      attempts,
+      nextAttemptAt: patch.state === "failed" ? nextAttemptAfter(attempts, at) : null,
+    })
+    .where(
+      and(
+        eq(statusTargets.id, target.id),
+        eq(statusTargets.state, target.state),
+        eq(statusTargets.attempts, target.attempts),
+      ),
+    )
+    .returning({ id: statusTargets.id });
+  if (updated.length === 0) return false;
   await db.insert(audit).values({
     id: newId(),
     workspaceId: ctx.workspaceId,
     personId: ctx.personId,
     action,
     result,
-    detail: patch.lastError,
+    detail: patch.lastError ?? patch.externalId ?? null,
     at,
     idempotencyKey: target.idempotencyKey,
   });
+  return true;
 }
 
-/** Runs every pending target independently; one failure never blocks another. */
-export async function executeTargets(
+async function run(
   db: Db,
   registry: ConnectorRegistry,
   ctx: ActorCtx,
   targets: TargetRow[],
   now: () => number,
+  from: readonly TargetState[],
 ): Promise<TargetRow[]> {
   for (const target of targets) {
-    if (target.state !== "pending") continue;
+    if (!from.includes(target.state as TargetState)) continue;
     const spec = JSON.parse(target.spec) as WriteSpec;
     const connector = registry.get(target.system);
     let patch: Patch;
@@ -103,6 +145,28 @@ export async function executeTargets(
     db,
     targets.map((t) => t.id),
   );
+}
+
+/** Runs every pending target independently; one failure never blocks another. */
+export async function executeTargets(
+  db: Db,
+  registry: ConnectorRegistry,
+  ctx: ActorCtx,
+  targets: TargetRow[],
+  now: () => number,
+): Promise<TargetRow[]> {
+  return run(db, registry, ctx, targets, now, ["pending"]);
+}
+
+/** Tries failed targets again, and runs targets that were left pending. Done, skipped and undone ones are left alone. */
+export async function retryTargets(
+  db: Db,
+  registry: ConnectorRegistry,
+  ctx: ActorCtx,
+  targets: TargetRow[],
+  now: () => number,
+): Promise<TargetRow[]> {
+  return run(db, registry, ctx, targets, now, ["pending", "failed"]);
 }
 
 /** Reverses done targets through their connector; pending ones simply become undone; failed ones stay failed. */
