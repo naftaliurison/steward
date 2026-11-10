@@ -46,7 +46,7 @@ type AccessResponse = {
   authed_user?: { id: string; access_token?: string };
 };
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   const map: Record<string, string> = {
     "&": "&amp;",
     "<": "&lt;",
