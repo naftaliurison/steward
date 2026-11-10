@@ -52,15 +52,25 @@ describe("buildStatusModal", () => {
 describe("readStatusSubmission", () => {
   const today = { today: "2026-11-12" };
 
-  it("refuses a first day in the future until scheduling exists", () => {
+  it("accepts a first day in the future", () => {
     const r = readStatusSubmission(
       values({ type: "out", from: "2026-11-13", to: "2026-11-14" }),
       today,
     );
-    expect(r).toEqual({
-      ok: false,
-      errors: { from: "Scheduling arrives in a later version — for now, the first day is today." },
-    });
+    expect(r.ok && r.input).toMatchObject({ from: "2026-11-13", to: "2026-11-14" });
+  });
+
+  it("accepts a first day a year ahead and refuses one a day later", () => {
+    const edge = readStatusSubmission(
+      values({ type: "out", from: "2027-11-12", to: "2027-11-12" }),
+      today,
+    );
+    expect(edge.ok).toBe(true);
+    const far = readStatusSubmission(
+      values({ type: "out", from: "2027-11-13", to: "2027-11-13" }),
+      today,
+    );
+    expect(far).toEqual({ ok: false, errors: { from: "Pick a first day within the next year." } });
   });
 
   it("accepts today as the first day and a last day in the future", () => {

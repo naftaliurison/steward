@@ -48,6 +48,8 @@ export const statuses = sqliteTable(
     index("statuses_person_state_idx").on(t.personId, t.state),
     index("statuses_workspace_idx").on(t.workspaceId),
     index("statuses_undo_until_idx").on(t.undoUntilMs),
+    /** The tick asks for "scheduled and due" and "active and over" every minute. */
+    index("statuses_state_start_idx").on(t.state, t.startMs),
   ],
 );
 
@@ -66,9 +68,14 @@ export const statusTargets = sqliteTable(
     externalId: text("external_id"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
+    /** When the tick should try this write (again). Null when nothing is waiting: done, skipped, undone, or given up. */
+    nextAttemptAt: integer("next_attempt_at"),
     idempotencyKey: text("idempotency_key").notNull().unique(),
   },
-  (t) => [index("status_targets_status_idx").on(t.statusId)],
+  (t) => [
+    index("status_targets_status_idx").on(t.statusId),
+    index("status_targets_retry_idx").on(t.state, t.nextAttemptAt),
+  ],
 );
 
 export const audit = sqliteTable(
@@ -103,7 +110,7 @@ export const demoSessions = sqliteTable("demo_sessions", {
   actionsUsed: integer("actions_used").notNull().default(0),
 });
 
-/** Everything the fake Slack was asked to do, in order: `view` (views.open), `response` (response_url post), `status` (profile status set or cleared). */
+/** Everything the fake Slack was asked to do, in order: `view` (views.open), `response` (response_url post), `status` (profile status set or cleared), `message` (chat.postMessage). */
 export const demoEvents = sqliteTable(
   "demo_events",
   {

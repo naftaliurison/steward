@@ -33,6 +33,23 @@ describe("RealSlackClient", () => {
     expect(JSON.parse(init.body as string).trigger_id).toBe("trig");
   });
 
+  it("posts a message with the bot token", async () => {
+    const fetchFn = fetchReturning({ ok: true });
+    const slack = new RealSlackClient(fetchFn);
+    await slack.postMessage({ botToken: "xoxb-1", channel: "U_DANA", text: "hello" });
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://slack.com/api/chat.postMessage");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer xoxb-1");
+    expect(JSON.parse(init.body as string)).toEqual({ channel: "U_DANA", text: "hello" });
+  });
+
+  it("fails loudly when Slack refuses the message", async () => {
+    const slack = new RealSlackClient(fetchReturning({ ok: false, error: "channel_not_found" }));
+    await expect(
+      slack.postMessage({ botToken: "xoxb-1", channel: "U_NOBODY", text: "hello" }),
+    ).rejects.toThrow("chat.postMessage: channel_not_found");
+  });
+
   it("sets a user status with the user token", async () => {
     const fetchFn = fetchReturning({ ok: true });
     const slack = new RealSlackClient(fetchFn);

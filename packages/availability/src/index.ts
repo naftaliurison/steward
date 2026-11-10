@@ -4,6 +4,7 @@ export type { ModalMeta, ReadResult, SubmittedView, ViewState } from "./status/f
 export {
   buildStatusModal,
   FIELD,
+  MAX_DAYS_AHEAD,
   readStatusSubmission,
   STATUS_MODAL_CALLBACK,
 } from "./status/form";
@@ -11,8 +12,11 @@ export { planWrites, SLACK_STATUS } from "./status/plan";
 export type { AvailabilityDeps, SaveResult } from "./status/service";
 export {
   activeStatusFor,
+  CANCEL_TOO_LATE,
   getStatus,
+  RECOVERY_DELAY_MS,
   saveStatus,
+  scheduledStatusesFor,
   UNDO_WINDOW_MS,
   undoStatus,
 } from "./status/service";

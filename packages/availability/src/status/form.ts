@@ -101,9 +101,17 @@ function isRealDate(d: string): boolean {
   return new Date(Date.UTC(y, m - 1, day)).toISOString().slice(0, 10) === d;
 }
 
+/** The furthest ahead a status may start. */
+export const MAX_DAYS_AHEAD = 365;
+
+const lastFirstDay = (today: string): string =>
+  new Date(Date.parse(`${today}T00:00:00Z`) + MAX_DAYS_AHEAD * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
 /**
- * Reads the submitted form. `today` is the person's local date: statuses must start today until
- * scheduling arrives (Plan 3), and the last day may not already be over.
+ * Reads the submitted form. `today` is the person's local date: the first day may be today, earlier,
+ * or up to a year ahead (a later first day is saved as scheduled), and the last day may not already be over.
  */
 export function readStatusSubmission(view: SubmittedView, opts: { today: string }): ReadResult {
   const node = (block: string): ValueNode | undefined => view.state.values[block]?.[block];
@@ -117,8 +125,8 @@ export function readStatusSubmission(view: SubmittedView, opts: { today: string 
   if (!isStatusType(type)) errors[FIELD.type] = "Pick what's happening";
   if (!DATE.test(from)) errors[FIELD.from] = "Pick a start date";
   else if (!isRealDate(from)) errors[FIELD.from] = "That date doesn't exist.";
-  else if (from > opts.today)
-    errors[FIELD.from] = "Scheduling arrives in a later version — for now, the first day is today.";
+  else if (from > lastFirstDay(opts.today))
+    errors[FIELD.from] = "Pick a first day within the next year.";
   if (!DATE.test(to)) errors[FIELD.to] = "Pick an end date";
   else if (!isRealDate(to)) errors[FIELD.to] = "That date doesn't exist.";
   else if (to < opts.today) errors[FIELD.to] = "The last day has already passed.";

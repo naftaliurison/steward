@@ -44,6 +44,52 @@ describe("/ooo", () => {
     app = createApp(deps);
   });
 
+  it("/ooo also shows the statuses that are scheduled, each with its own Cancel", async () => {
+    await seedWorkspace(deps);
+    for (const day of ["2026-11-20", "2026-11-13"]) {
+      await slackPost(app, "/slack/interactions", {
+        payload: JSON.stringify(submission({ type: "out", from: day, to: day })),
+      });
+      await flush(deps);
+    }
+    deps.slack.responses.length = 0;
+
+    const res = await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "trig-2",
+      response_url: RESPONSE_URL,
+    });
+    expect(res.status).toBe(200);
+    await flush(deps);
+    expect(deps.slack.responses).toHaveLength(2);
+    expect(deps.slack.responses[0]?.text).toMatch(/^Scheduled · Out of office · /);
+    expect(deps.slack.responses[1]?.text).toMatch(/^Scheduled · Out of office · /);
+    // Earliest first: the two cards are for different statuses, the 13th before the 20th.
+    const [first, second] = deps.slack.responses.map((r) => undoValue(r.blocks ?? []));
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    const rows = await deps.db.select().from(schema.statuses);
+    const startOf = (id: string | undefined) => rows.find((r) => r.id === id)?.startMs ?? 0;
+    expect(startOf(first)).toBeLessThan(startOf(second));
+  });
+
+  it("/ooo sends nothing extra when nothing is scheduled", async () => {
+    await seedWorkspace(deps);
+    await slackPost(app, "/slack/commands", {
+      command: "/ooo",
+      team_id: "T1",
+      user_id: "U_DANA",
+      user_name: "dana",
+      trigger_id: "trig-3",
+      response_url: RESPONSE_URL,
+    });
+    await flush(deps);
+    expect(deps.slack.responses).toHaveLength(0);
+  });
+
   it("rejects an unsigned request", async () => {
     const res = await app.request("/slack/commands", { method: "POST", body: "command=%2Fooo" });
     expect(res.status).toBe(401);
@@ -137,16 +183,32 @@ describe("/ooo", () => {
     expect(deps.slack.responses).toHaveLength(0);
   });
 
-  it("refuses a first day in the future with a plain field error, before saving anything", async () => {
+  it("saves a future first day as scheduled: Slack untouched, the receipt offers Cancel, Cancel calls it off", async () => {
     await seedWorkspace(deps);
     const res = await slackPost(app, "/slack/interactions", {
       payload: JSON.stringify(submission({ type: "out", from: "2026-11-13", to: "2026-11-14" })),
     });
-    expect(await res.json()).toEqual({
-      response_action: "errors",
-      errors: { from: "Scheduling arrives in a later version — for now, the first day is today." },
+    expect(res.status).toBe(200);
+    await flush(deps);
+    const receipt = deps.slack.responses[0];
+    expect(receipt?.text).toMatch(/^Scheduled · Out of office · /);
+    expect(deps.slack.statuses.size).toBe(0);
+    const statusId = undoValue(receipt?.blocks ?? []);
+    expect(statusId).toBeTruthy();
+
+    const cancel = await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({
+        type: "block_actions",
+        team: { id: "T1" },
+        user: { id: "U_DANA", username: "dana" },
+        response_url: RESPONSE_URL,
+        actions: [{ action_id: UNDO_ACTION, value: statusId }],
+      }),
     });
-    expect(deps.deferred).toHaveLength(0);
+    expect(cancel.status).toBe(200);
+    await flush(deps);
+    expect(deps.slack.responses[1]?.replaceOriginal).toBe(true);
+    expect(deps.slack.responses[1]?.text).toMatch(/^Cancelled · Out of office/);
     expect(deps.slack.statuses.size).toBe(0);
   });
 

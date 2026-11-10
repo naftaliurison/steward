@@ -38,6 +38,9 @@ export function deriveScreen(
       // A replaced card keeps its place and its identity, as a Slack message keeps its timestamp.
       if (original) messages[index] = { seq: original.seq, at: original.at, text, blocks };
       else messages.push({ seq: event.seq, at: event.at, text, blocks });
+    } else if (event.kind === "message") {
+      const { text, blocks } = event.payload;
+      messages.push({ seq: event.seq, at: event.at, text, blocks });
     } else {
       statuses[event.payload.slackUserId] = event.payload.status;
     }

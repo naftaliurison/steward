@@ -18,7 +18,11 @@ const status: StatusRow = {
   undoUntilMs: now + 300_000,
   replacedStatusId: null,
 };
-const target = (state: string, lastError: string | null = null): TargetRow => ({
+const target = (
+  state: string,
+  lastError: string | null = null,
+  nextAttemptAt: number | null = null,
+): TargetRow => ({
   id: "G1",
   statusId: "S1",
   system: "slack-status",
@@ -28,6 +32,7 @@ const target = (state: string, lastError: string | null = null): TargetRow => ({
   externalId: null,
   attempts: 1,
   lastError,
+  nextAttemptAt,
   idempotencyKey: "S1:slack-status:set",
 });
 
@@ -84,5 +89,36 @@ describe("resultCard", () => {
     expect(undone.blocks[1]?.type === "section" && undone.blocks[1].text?.text).toBe(
       "↩️ Slack status cleared",
     );
+  });
+
+  it("a scheduled status says so and offers Cancel until it starts", () => {
+    const startMs = now + 2 * 86_400_000;
+    const scheduled = { ...status, state: "scheduled", startMs, undoUntilMs: startMs };
+    const card = resultCard({
+      status: scheduled,
+      targets: [{ ...target("pending"), attempts: 0 }],
+      tz: "UTC",
+      now,
+    });
+    expect(card.text.startsWith("Scheduled · Out of office · ")).toBe(true);
+    const json = JSON.stringify(card.blocks);
+    expect(json).toContain('"Cancel"');
+    expect(json).not.toContain('"Undo"');
+    expect(json).toContain("You can cancel until it starts (");
+  });
+
+  it("a status cancelled before it started is called cancelled, and nothing was cleared", () => {
+    const startMs = now + 2 * 86_400_000;
+    const card = resultCard({
+      status: { ...status, state: "cancelled", startMs, undoUntilMs: null },
+      targets: [{ ...target("undone"), attempts: 1 }],
+      tz: "UTC",
+      now,
+    });
+    expect(card.text.startsWith("Cancelled · Out of office · ")).toBe(true);
+    const json = JSON.stringify(card.blocks);
+    expect(json).toContain("↩️ Slack status — won't be set");
+    expect(json).not.toContain("cleared");
+    expect(card.blocks.some((b) => b.type === "actions")).toBe(false);
   });
 });

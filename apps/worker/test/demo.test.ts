@@ -1,4 +1,4 @@
-import { STATUS_MODAL_CALLBACK, todayIn, UNDO_ACTION } from "@steward/availability";
+import { nextDay, STATUS_MODAL_CALLBACK, todayIn, UNDO_ACTION } from "@steward/availability";
 import { schema } from "@steward/core";
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
@@ -112,6 +112,25 @@ describe("/demo", () => {
       `https://hooks.slack.com/demo/${s.id}`,
     );
     expect(JSON.stringify(state)).not.toContain("xoxp");
+  });
+
+  it("moving the demo clock past the first day starts a scheduled status", async () => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    const s = (await (await post(app, "/demo/sessions", {})).json()) as Created;
+    const tomorrow = nextDay(todayIn("UTC", NOW));
+    await post(app, `/demo/${s.id}/command`, { text: "/ooo" });
+    await post(app, `/demo/${s.id}/interact`, submission(tomorrow, tomorrow));
+    let state = await getState(app, s.id);
+    expect(JSON.stringify(state.events.at(-1)?.payload)).toContain("Scheduled · ");
+    expect(state.events.some((e) => e.kind === "status")).toBe(false);
+
+    const advanced = await post(app, `/demo/${s.id}/advance`, { minutes: 1440 });
+    expect(advanced.status).toBe(200);
+    state = await getState(app, s.id);
+    const set = state.events.filter((e) => e.kind === "status");
+    expect(set).toHaveLength(1);
+    expect(JSON.stringify(set[0]?.payload)).toContain("Out of office");
   });
 
   it("advances time so the undo window closes, and a gone session is a 404", async () => {

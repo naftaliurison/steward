@@ -20,11 +20,25 @@ export type {
 export * as schema from "./db/schema";
 export type { ActorCtx, Connector, ConnectorCtx, WriteSpec } from "./engine/connector";
 export { ConnectorRegistry, SkipWrite } from "./engine/connector";
-export type { TargetState } from "./engine/engine";
-export { createTargets, executeTargets, targetsForStatus, undoTargets } from "./engine/engine";
+export type { RetryOutcome, TargetState } from "./engine/engine";
+export {
+  createTargets,
+  executeTargets,
+  MAX_ATTEMPTS,
+  nextAttemptAfter,
+  retryTargets,
+  targetsForStatus,
+  undoTargets,
+} from "./engine/engine";
 export { newId } from "./ids";
 export * from "./slack/blocks";
-export type { RespondArgs, SetStatusArgs, SlackClient, UserProfile } from "./slack/client";
+export type {
+  PostMessageArgs,
+  RespondArgs,
+  SetStatusArgs,
+  SlackClient,
+  UserProfile,
+} from "./slack/client";
 export { assertTrustedResponseUrl, RealSlackClient, SlackApiError } from "./slack/client";
 export type { FakeStatus } from "./slack/fake";
 export { FakeSlackClient } from "./slack/fake";

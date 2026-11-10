@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../db/client";
-import { audit, statuses } from "../db/schema";
+import { audit, statuses, statusTargets } from "../db/schema";
 import { createTestDb } from "../testing";
 import {
   type ActorCtx,
@@ -11,7 +11,15 @@ import {
   SkipWrite,
   type WriteSpec,
 } from "./connector";
-import { createTargets, executeTargets, targetsForStatus, undoTargets } from "./engine";
+import {
+  createTargets,
+  executeTargets,
+  MAX_ATTEMPTS,
+  nextAttemptAfter,
+  retryTargets,
+  targetsForStatus,
+  undoTargets,
+} from "./engine";
 
 class RecordingConnector implements Connector {
   performed: WriteSpec[] = [];
@@ -33,6 +41,21 @@ class RecordingConnector implements Connector {
     if (this.behaviour === "undoFails") throw new Error("remote said no");
     this.undone.push(externalId);
   }
+}
+
+/** Fails its first `failures` calls, then succeeds. */
+class FlakyConnector implements Connector {
+  calls = 0;
+  constructor(
+    readonly system: string,
+    private readonly failures: number,
+  ) {}
+  async perform(): Promise<{ externalId: string }> {
+    this.calls++;
+    if (this.calls <= this.failures) throw new Error("try later");
+    return { externalId: `ext-${this.calls}` };
+  }
+  async undo(): Promise<void> {}
 }
 
 const ctx: ActorCtx = { workspaceId: "T1", personId: "T1:U1", userToken: "xoxp" };
@@ -108,7 +131,7 @@ describe("engine", () => {
       { system: "b", op: "set", args: {} },
       { system: "a", op: "later", args: {} },
     ]);
-    const [done, failed, pending] = await executeTargets(
+    const [pending, done, failed] = await executeTargets(
       db,
       registry,
       ctx,
@@ -177,5 +200,137 @@ describe("engine", () => {
     expect(done[0]?.attempts).toBe(1);
     const undone = await undoTargets(db, registry, ctx, done, now);
     expect(undone[0]?.attempts).toBe(2);
+  });
+
+  it("waits 1, 2, 4, 8 and 16 minutes between tries and gives up after the sixth", () => {
+    expect(MAX_ATTEMPTS).toBe(6);
+    expect([1, 2, 3, 4, 5].map((n) => nextAttemptAfter(n, 0))).toEqual([
+      60_000, 120_000, 240_000, 480_000, 960_000,
+    ]);
+    expect(nextAttemptAfter(6, 0)).toBeNull();
+    expect(nextAttemptAfter(1, 1_000)).toBe(61_000);
+  });
+
+  it("stores when a stranded target should be picked up, and clears it once the write is done", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a"));
+    const created = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }], 5_000);
+    expect(created[0]?.nextAttemptAt).toBe(5_000);
+    const [done] = await executeTargets(db, registry, ctx, created, now);
+    expect(done?.state).toBe("done");
+    expect(done?.nextAttemptAt).toBeNull();
+  });
+
+  it("a failed write says when it will be tried again", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a", "fail"));
+    const created = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    const [failed] = await executeTargets(db, registry, ctx, created, now);
+    expect(failed).toMatchObject({ state: "failed", attempts: 1, nextAttemptAt: now() + 60_000 });
+  });
+
+  it("retries a failed write until it goes through", async () => {
+    const flaky = new FlakyConnector("a", 2);
+    const registry = new ConnectorRegistry().register(flaky);
+    let rows = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    rows = await executeTargets(db, registry, ctx, rows, now);
+    expect((await retryTargets(db, registry, ctx, rows, now))[0]).toMatchObject({
+      won: true,
+      state: "failed",
+      attempts: 2,
+      nextAttemptAt: now() + 120_000,
+    });
+    rows = await targetsForStatus(db, "S1");
+    expect((await retryTargets(db, registry, ctx, rows, now))[0]).toMatchObject({ won: true });
+    rows = await targetsForStatus(db, "S1");
+    expect(rows[0]).toMatchObject({
+      state: "done",
+      attempts: 3,
+      externalId: "ext-3",
+      lastError: null,
+      nextAttemptAt: null,
+    });
+    // A done target is left alone.
+    await retryTargets(db, registry, ctx, rows, now);
+    expect(flaky.calls).toBe(3);
+  });
+
+  it("gives up after the sixth failure", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a", "fail"));
+    let rows = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    rows = await executeTargets(db, registry, ctx, rows, now);
+    for (let i = 0; i < 5; i++) {
+      await retryTargets(db, registry, ctx, rows, now);
+      rows = await targetsForStatus(db, "S1");
+    }
+    expect(rows[0]).toMatchObject({ state: "failed", attempts: 6, nextAttemptAt: null });
+  });
+
+  it("retry also runs a target that was left pending", async () => {
+    const a = new RecordingConnector("a");
+    const registry = new ConnectorRegistry().register(a);
+    const rows = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }], 1);
+    const [done] = await retryTargets(db, registry, ctx, rows, now);
+    expect(done).toMatchObject({ ran: true, won: true, state: "done", attempts: 1 });
+    expect(a.performed).toHaveLength(1);
+  });
+
+  it("retry does not run a target that has used all its tries, whatever the caller filtered", async () => {
+    const a = new RecordingConnector("a", "fail");
+    const registry = new ConnectorRegistry().register(a);
+    const [created] = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    if (!created) throw new Error("no target");
+    const spent = { ...created, state: "failed", attempts: MAX_ATTEMPTS, lastError: "old" };
+    const [outcome] = await retryTargets(db, registry, ctx, [spent], now);
+    expect(outcome).toMatchObject({
+      ran: false,
+      won: false,
+      state: "failed",
+      attempts: MAX_ATTEMPTS,
+      lastError: "old",
+    });
+    expect(a.keysSeen).toHaveLength(0);
+  });
+
+  it("retry says it lost when the row changed underneath it, and reports the state it read", async () => {
+    const a = new RecordingConnector("a");
+    const registry = new ConnectorRegistry().register(a);
+    const stale = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }], 1);
+    await db
+      .update(statusTargets)
+      .set({ attempts: 1, state: "failed" })
+      .where(eq(statusTargets.statusId, "S1"));
+    const [outcome] = await retryTargets(db, registry, ctx, stale, now);
+    expect(outcome).toMatchObject({ ran: true, won: false, state: "pending", attempts: 0 });
+    expect(await db.select().from(audit)).toHaveLength(0);
+  });
+
+  it("does not record a result over a row that changed underneath it", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a"));
+    const stale = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    // Someone else (an Undo) got there first.
+    await db.update(statusTargets).set({ state: "undone" }).where(eq(statusTargets.statusId, "S1"));
+    const [row] = await executeTargets(db, registry, ctx, stale, now);
+    expect(row).toMatchObject({ state: "undone", attempts: 0 });
+    expect(await db.select().from(audit)).toHaveLength(0);
+  });
+
+  it("keeps the external id of a successful write in the audit trail", async () => {
+    const registry = new ConnectorRegistry().register(new RecordingConnector("a"));
+    const rows = await createTargets(db, "S1", [{ system: "a", op: "set", args: {} }]);
+    await executeTargets(db, registry, ctx, rows, now);
+    const trail = await db.select().from(audit);
+    expect(trail[0]).toMatchObject({ action: "a.set", result: "done", detail: "ext-1" });
+  });
+
+  it("returns targets in a steady order", async () => {
+    const registry = new ConnectorRegistry()
+      .register(new RecordingConnector("b"))
+      .register(new RecordingConnector("a"));
+    const rows = await createTargets(db, "S1", [
+      { system: "b", op: "set", args: {} },
+      { system: "a", op: "set", args: {} },
+    ]);
+    const executed = await executeTargets(db, registry, ctx, rows, now);
+    expect(executed.map((t) => t.system)).toEqual(["b", "a"]); // the order given
+    expect((await targetsForStatus(db, "S1")).map((t) => t.system)).toEqual(["a", "b"]);
   });
 });

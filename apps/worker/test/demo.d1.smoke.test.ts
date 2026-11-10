@@ -1,8 +1,10 @@
-import { ensurePerson, schema, upsertWorkspace } from "@steward/core";
+import { nextDay, STATUS_MODAL_CALLBACK, todayIn } from "@steward/availability";
+import { ensurePerson, schema, seal, upsertWorkspace } from "@steward/core";
 import { applyD1Migrations } from "@steward/core/testing";
 import { eq } from "drizzle-orm";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createApp } from "../src/app";
 import { createD1Db } from "../src/db";
 import {
   advanceDemoClock,
@@ -141,7 +143,8 @@ describe("the demo on the real D1 driver (Miniflare)", () => {
     queries = 0;
     const result = await runTick(deps);
     expect(result.demoSessionsRemoved).toBe(5);
-    expect(queries).toBeLessThanOrEqual(16);
+    expect(result).toMatchObject({ started: 0, retried: 0 });
+    expect(queries).toBeLessThanOrEqual(21);
 
     const ids = (await deps.db.select({ id: schema.workspaces.id }).from(schema.workspaces)).map(
       (w) => w.id,
@@ -177,5 +180,120 @@ describe("the demo on the real D1 driver (Miniflare)", () => {
       .from(schema.demoSessions)
       .where(eq(schema.demoSessions.id, session.id));
     expect(row?.actionsUsed).toBe(DEMO_MAX_ACTIONS);
+  }, 60_000);
+
+  it("a full minute (three starts, two retries) stays under D1 Free's 50 statements", async () => {
+    await upsertWorkspace(deps.db, {
+      id: "T_FULL",
+      name: "Full",
+      botTokenSealed: await seal(deps.tokenKey, "xoxb-full"),
+      botUserId: "UB",
+      installedAt: 1,
+    });
+    const at = deps.clock.now;
+    const status = (id: string, personId: string, state: string) => ({
+      id,
+      workspaceId: "T_FULL",
+      personId,
+      type: "out",
+      startMs: at - 1000,
+      endMs: at + 86_400_000,
+      text: "Out of office",
+      emoji: ":palm_tree:",
+      state,
+      source: "form",
+      createdAt: at - 2000,
+      undoUntilMs: null,
+      replacedStatusId: null,
+    });
+    const target = (statusId: string, state: string, attempts: number) => ({
+      id: `G_${statusId}`,
+      statusId,
+      system: "slack-status",
+      op: "set",
+      spec: "{}",
+      state,
+      externalId: null,
+      attempts,
+      lastError: null,
+      idempotencyKey: `${statusId}:slack-status:set`,
+      nextAttemptAt: at - 1,
+    });
+    // Nobody here has connected Slack, so every write is skipped and every one sends a message:
+    // the same number of statements as a write that works.
+    for (const n of [1, 2, 3, 4, 5]) {
+      const person = await ensurePerson(deps.db, "T_FULL", `U_F${n}`, `F${n}`);
+      const starting = n <= 3;
+      await deps.db
+        .insert(schema.statuses)
+        .values(status(`S_F${n}`, person.id, starting ? "scheduled" : "active"));
+      await deps.db
+        .insert(schema.statusTargets)
+        .values(target(`S_F${n}`, starting ? "pending" : "failed", starting ? 0 : 5));
+    }
+    // One expired demo session with rows to delete, so the cleanup runs at its worst case (15 statements).
+    await deps.db.insert(schema.demoSessions).values({
+      id: "full-exp",
+      createdAt: at - 10_000,
+      expiresAt: at - 1,
+      youPersonId: "none",
+    });
+    await deps.db.insert(schema.workspaces).values({
+      id: demoWorkspaceId("full-exp"),
+      name: "Expired",
+      botTokenSealed: "sealed",
+      botUserId: "UB",
+      installedAt: at - 10_000,
+    });
+    await deps.db.insert(schema.demoEvents).values({
+      id: "full-exp-1",
+      sessionId: "full-exp",
+      seq: 1,
+      kind: "message",
+      payload: "{}",
+      at: at - 10_000,
+    });
+    queries = 0;
+    const result = await runTick(deps);
+    expect(result).toMatchObject({ started: 3, retried: 2, demoSessionsRemoved: 1 });
+    expect(queries).toBeLessThanOrEqual(45);
+  }, 60_000);
+
+  it("moving a demo clock that starts a scheduled status stays under D1 Free's 50 statements", async () => {
+    const app = createApp(deps);
+    const post = (path: string, body: unknown) =>
+      app.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const created = await post("/demo/sessions", {});
+    const session = (await created.json()) as { id: string };
+    const tomorrow = nextDay(todayIn("UTC", NOW));
+    const day = { selected_date: tomorrow };
+    await post(`/demo/${session.id}/interact`, {
+      type: "view_submission",
+      team: { id: "T_X" },
+      user: { id: "U_X" },
+      view: {
+        callback_id: STATUS_MODAL_CALLBACK,
+        private_metadata: "{}",
+        state: {
+          values: {
+            type: { type: { type: "static_select", selected_option: { value: "out" } } },
+            from: { from: { type: "datepicker", ...day } },
+            to: { to: { type: "datepicker", ...day } },
+            text: { text: { type: "plain_text_input", value: null } },
+            emoji: { emoji: { type: "plain_text_input", value: null } },
+          },
+        },
+      },
+    });
+    queries = 0;
+    const advanced = await post(`/demo/${session.id}/advance`, { minutes: 1440 });
+    expect(advanced.status).toBe(200);
+    const events = await readDemoEvents(deps.db, session.id);
+    expect(events.some((e) => e.kind === "status")).toBe(true);
+    expect(queries).toBeLessThanOrEqual(45);
   }, 60_000);
 });
