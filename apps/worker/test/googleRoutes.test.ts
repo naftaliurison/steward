@@ -2,6 +2,7 @@ import { calendarsOf, GOOGLE_SCOPE, getGoogleConnection, open, schema } from "@s
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
+import { createDemoSession } from "../src/demo/session";
 import { signGoogleState, verifyGoogleState } from "../src/google/state";
 import { NOW, SIGNING_SECRET, seedWorkspace, type TestDeps, testDeps } from "./helpers";
 
@@ -299,6 +300,27 @@ describe("Connect Google", () => {
           expect(html).not.toContain(secret);
         }
       }
+    });
+  });
+
+  describe("a demo person", () => {
+    it("gets the expired-link page on /start and /callback, and nothing is exchanged or stored", async () => {
+      const demo = await createDemoSession(deps, {});
+      if ("error" in demo) throw new Error("unexpected busy");
+      expect(demo.workspaceId.startsWith("demo:")).toBe(true);
+      const state = await signGoogleState(SIGNING_SECRET, demo.youPersonId, nowSeconds);
+
+      const start = await app.request(`/oauth/google/start?state=${state}`);
+      expect(start.status).toBe(400);
+      expect(await start.text()).toContain(EXPIRED);
+
+      const cb = await app.request(`/oauth/google/callback?code=${CODE}&state=${state}`);
+      expect(cb.status).toBe(400);
+      expect(await cb.text()).toContain(EXPIRED);
+
+      expect(deps.google.exchangedCodes).toEqual([]);
+      expect(await deps.db.select().from(schema.googleConnections)).toHaveLength(0);
+      expect(await getGoogleConnection(deps.db, demo.youPersonId)).toBeNull();
     });
   });
 

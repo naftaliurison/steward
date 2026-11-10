@@ -69,7 +69,8 @@ export async function handleSlashCommand(deps: Deps, form: URLSearchParams): Pro
       userId,
       form.get("user_name") ?? userId,
     );
-    const cmd = googleCommandOf(form.get("text") ?? "");
+    // A demo person is never offered Google: the form opens as for plain /ooo.
+    const cmd = workspace.id.startsWith("demo:") ? null : googleCommandOf(form.get("text") ?? "");
     if (cmd !== null) {
       try {
         return cmd === "google"

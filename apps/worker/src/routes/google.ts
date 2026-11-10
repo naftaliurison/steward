@@ -55,6 +55,7 @@ export function googleRoutes(deps: Deps) {
     const person = await getPerson(deps.db, personId);
     const workspace = person ? await getWorkspace(deps.db, person.workspaceId) : null;
     if (!person || !workspace) return expired(c);
+    if (workspace.id.startsWith("demo:")) return expired(c);
 
     const url = new URL(GOOGLE_AUTH_URL);
     url.searchParams.set("client_id", deps.googleClientId ?? "");
@@ -93,6 +94,7 @@ export function googleRoutes(deps: Deps) {
     if (personId === null || code === "") return expired(c);
     const person = await getPerson(deps.db, personId);
     if (!person) return expired(c);
+    if (person.workspaceId.startsWith("demo:")) return expired(c);
 
     const clientId = deps.googleClientId ?? "";
     const clientSecret = deps.googleClientSecret ?? "";

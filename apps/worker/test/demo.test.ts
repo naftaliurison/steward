@@ -114,6 +114,24 @@ describe("/demo", () => {
     expect(JSON.stringify(state)).not.toContain("xoxp");
   });
 
+  it("/ooo google in the demo opens the form and never mentions Google", async () => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    const created = await post(app, "/demo/sessions", {});
+    const s = (await created.json()) as Created;
+
+    const cmd = await post(app, `/demo/${s.id}/command`, { text: "/ooo google" });
+    const answer = (await cmd.json()) as { text: string };
+    expect(answer.text).toBe("");
+    expect(answer.text).not.toMatch(/google/i);
+    expect(answer.text).not.toContain("http");
+    const state = await getState(app, s.id);
+    expect(state.events.map((e) => e.kind)).toEqual(["view"]);
+
+    const off = await post(app, `/demo/${s.id}/command`, { text: "/ooo google disconnect" });
+    expect(((await off.json()) as { text: string }).text).toBe("");
+  });
+
   it("moving the demo clock past the first day starts a scheduled status", async () => {
     const deps = testDeps();
     const app = createApp(deps);

@@ -194,6 +194,9 @@ export function demoDeps(deps: Deps, session: DemoSession): Deps & { settle: () 
   return {
     ...deps,
     now,
+    // The demo must never reach Google: no ids, so no connect link can be signed or accepted.
+    googleClientId: null,
+    googleClientSecret: null,
     slack: new DemoSlackClient(deps.db, session.id, now),
     defer: (work) => {
       // Handle the rejection right away so it is never unhandled while it waits for settle().
