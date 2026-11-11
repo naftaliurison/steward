@@ -87,21 +87,21 @@ describe("RealGoogleClient", () => {
 
   it("inserts an event and reports Google's reason on a refusal", async () => {
     const event = {
-      id: "stwabc",
+      id: "st0abc",
       summary: "Out of office",
       start: { date: "2026-11-12" },
       end: { date: "2026-11-18" },
       transparency: "opaque" as const,
     };
     const { client, call } = clientAnswering(
-      json({ id: "stwabc" }),
+      json({ id: "st0abc" }),
       json(
         { error: { code: 409, status: "ALREADY_EXISTS", errors: [{ reason: "duplicate" }] } },
         409,
       ),
     );
     const args = { accessToken: "ya29.a", calendarId: "team@group.calendar.google.com", event };
-    expect(await client.insertEvent(args)).toEqual({ id: "stwabc" });
+    expect(await client.insertEvent(args)).toEqual({ id: "st0abc" });
     const [url, init] = call();
     expect(url).toBe(
       "https://www.googleapis.com/calendar/v3/calendars/team%40group.calendar.google.com/events",
@@ -116,9 +116,9 @@ describe("RealGoogleClient", () => {
 
   it("treats an event that is already gone as deleted", async () => {
     const { client, call } = clientAnswering(new Response(null, { status: 410 }));
-    await client.deleteEvent({ accessToken: "ya29.a", calendarId: "primary", eventId: "stwabc" });
+    await client.deleteEvent({ accessToken: "ya29.a", calendarId: "primary", eventId: "st0abc" });
     expect(call()[0]).toBe(
-      "https://www.googleapis.com/calendar/v3/calendars/primary/events/stwabc",
+      "https://www.googleapis.com/calendar/v3/calendars/primary/events/st0abc",
     );
     expect(call()[1].method).toBe("DELETE");
   });

@@ -15,11 +15,14 @@ import { expiringOn401, googleAccessOrSkip } from "./googleAccess";
 
 export const DECLINE_MESSAGE = "Declined because I am out of office.";
 
-/** The same event id on every calendar and on every retry: "stw" + the SHA-256 of the key in hex. */
+/**
+ * The same event id on every calendar and on every retry: "st" + the SHA-256 of the key in hex.
+ * Google takes only 0-9 and a-v in an event id, so the prefix must stay inside those letters.
+ */
 export async function eventIdFor(idempotencyKey: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(idempotencyKey));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `stw${hex}`;
+  return `st${hex}`;
 }
 
 /** Puts an out-of-office event on each chosen calendar, and removes it on undo. */
