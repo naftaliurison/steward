@@ -1,4 +1,10 @@
-import { type Db, RealSlackClient, type SlackClient } from "@steward/core";
+import {
+  type Db,
+  type GoogleClient,
+  RealGoogleClient,
+  RealSlackClient,
+  type SlackClient,
+} from "@steward/core";
 import { createD1Db } from "./db";
 import type { DemoLimiter, Env } from "./env";
 
@@ -6,6 +12,10 @@ import type { DemoLimiter, Env } from "./env";
 export type Deps = {
   db: Db;
   slack: SlackClient;
+  google: GoogleClient;
+  /** Null until the owner sets the Google OAuth client; then Google is offered. */
+  googleClientId: string | null;
+  googleClientSecret: string | null;
   fetchFn: typeof fetch;
   now: () => number;
   signingSecret: string;
@@ -34,6 +44,9 @@ export function depsFromEnv(env: Env, ctx: ExecutionContext): Deps {
   return {
     db: createD1Db(env.DB),
     slack: new RealSlackClient(platformFetch),
+    google: new RealGoogleClient(platformFetch),
+    googleClientId: env.GOOGLE_CLIENT_ID || null,
+    googleClientSecret: env.GOOGLE_CLIENT_SECRET || null,
     fetchFn: platformFetch,
     now: () => Date.now(),
     signingSecret: env.SLACK_SIGNING_SECRET,

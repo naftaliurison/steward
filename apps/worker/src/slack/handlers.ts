@@ -2,7 +2,6 @@ import {
   buildStatusModal,
   readStatusSubmission,
   resultCard,
-  SlackStatusConnector,
   STATUS_MODAL_CALLBACK,
   saveStatus,
   scheduledStatusesFor,
@@ -10,16 +9,12 @@ import {
   UNDO_ACTION,
   undoStatus,
 } from "@steward/availability";
-import {
-  ConnectorRegistry,
-  getWorkspace,
-  open,
-  type PersonRow,
-  targetsForStatus,
-} from "@steward/core";
+import { getWorkspace, open, type PersonRow, targetsForStatus } from "@steward/core";
 import type { Deps } from "../deps";
 import { personForSlackUser } from "../people";
+import { googleConfigured, registryFor } from "../registry";
 import type { BlockActionsPayload, InteractionPayload, ViewSubmissionPayload } from "../slackTypes";
+import { googleCommandOf, googleDisconnectText, googleStatusText } from "./googleCommand";
 
 export const SAVE_FAILED = "Your status didn't save. Please try again in a moment.";
 export const UNDO_FAILED = "Undo didn't go through. Please try again in a moment.";
@@ -74,6 +69,18 @@ export async function handleSlashCommand(deps: Deps, form: URLSearchParams): Pro
       userId,
       form.get("user_name") ?? userId,
     );
+    // A demo person is never offered Google: the form opens as for plain /ooo.
+    const cmd = workspace.id.startsWith("demo:") ? null : googleCommandOf(form.get("text") ?? "");
+    if (cmd !== null) {
+      try {
+        return cmd === "google"
+          ? await googleStatusText(deps, person)
+          : await googleDisconnectText(deps, person);
+      } catch {
+        console.error("could not answer /ooo google", { person: person.id });
+        return "Steward couldn't do that just now. Please try again.";
+      }
+    }
     await deps.slack.openView({
       botToken,
       triggerId: form.get("trigger_id") ?? "",
@@ -114,8 +121,9 @@ export async function handleInteraction(
   if (!workspace) return { kind: "text", body: "" };
   const availability = {
     db: deps.db,
-    registry: new ConnectorRegistry().register(new SlackStatusConnector(deps.slack)),
+    registry: registryFor(deps),
     now: deps.now,
+    googleHint: googleConfigured(deps) && !workspace.id.startsWith("demo:"),
   };
   // Slack wants view_submission and block_actions answered within 3 seconds, so the work runs after the answer.
   const tellUser = async (responseUrl: string | undefined, text: string) => {

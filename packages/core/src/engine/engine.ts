@@ -39,13 +39,13 @@ export async function targetsForStatus(db: Db, statusId: string): Promise<Target
 /**
  * One pending row per write. The idempotency key is stable across retries of the same status.
  * `recoverAt` is when the tick may pick the row up if it is still pending then (the work that
- * should have run it never finished).
+ * should have run it never finished). It may be a function of the spec, called once per spec.
  */
 export async function createTargets(
   db: Db,
   statusId: string,
   specs: WriteSpec[],
-  recoverAt: number | null = null,
+  recoverAt: number | null | ((spec: WriteSpec) => number | null) = null,
 ): Promise<TargetRow[]> {
   const rows: TargetRow[] = specs.map((spec) => ({
     id: newId(),
@@ -57,7 +57,7 @@ export async function createTargets(
     externalId: null,
     attempts: 0,
     lastError: null,
-    nextAttemptAt: recoverAt,
+    nextAttemptAt: typeof recoverAt === "function" ? recoverAt(spec) : recoverAt,
     idempotencyKey: `${statusId}:${spec.system}:${spec.op}`,
   }));
   if (rows.length > 0) await db.insert(statusTargets).values(rows);
@@ -260,8 +260,13 @@ export async function undoTargets(
         });
         patch = { state: "undone", lastError: null };
       } catch (err) {
-        result = "undo_failed";
-        patch = { state: "done", lastError: `undo didn't go through — ${errorMessage(err)}` };
+        if (err instanceof SkipWrite) {
+          // Nothing to reverse any more (Google was disconnected): the undo is done, and the reason says what was left.
+          patch = { state: "undone", lastError: err.reason };
+        } else {
+          result = "undo_failed";
+          patch = { state: "done", lastError: `undo didn't go through — ${errorMessage(err)}` };
+        }
       }
     }
     await record(db, ctx, target, action, patch, now(), result);

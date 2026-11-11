@@ -16,6 +16,7 @@
         "command": "/ooo",
         "url": "https://APP_HOST/slack/commands",
         "description": "Set your availability",
+        "usage_hint": "[google | google disconnect]",
         "should_escape": false
       }
     ]

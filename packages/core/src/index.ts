@@ -1,17 +1,27 @@
 export { newKeyB64, open, seal } from "./crypto/seal";
 export type { Db } from "./db/client";
+export type { GoogleCalendar } from "./db/repo";
 export {
+  calendarsOf,
+  deleteGoogleConnection,
   ensurePerson,
+  GOOGLE_SCOPE,
+  getGoogleConnection,
   getPerson,
   getWorkspace,
+  hasGoogleScope,
   personId,
+  setGoogleAccessToken,
+  setGoogleHealth,
   setPersonUserToken,
   updatePersonProfile,
+  upsertGoogleConnection,
   upsertWorkspace,
 } from "./db/repo";
 export type {
   DemoEventRow,
   DemoSessionRow,
+  GoogleConnectionRow,
   PersonRow,
   StatusRow,
   TargetRow,
@@ -30,6 +40,24 @@ export {
   targetsForStatus,
   undoTargets,
 } from "./engine/engine";
+export type {
+  GoogleAppCredentials,
+  GoogleCalendarEntry,
+  GoogleClient,
+  GoogleEventInput,
+  GoogleEventTime,
+  GoogleTokens,
+  VacationSettings,
+} from "./google/client";
+export {
+  emailFromIdToken,
+  GOOGLE_TIMEOUT_MS,
+  GoogleApiError,
+  RealGoogleClient,
+} from "./google/client";
+export { FakeGoogleClient } from "./google/fake";
+export type { GoogleAccess } from "./google/tokens";
+export { ACCESS_TOKEN_MARGIN_MS, GoogleTokenSource } from "./google/tokens";
 export { newId } from "./ids";
 export * from "./slack/blocks";
 export type {

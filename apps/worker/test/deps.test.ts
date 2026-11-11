@@ -33,4 +33,21 @@ describe("depsFromEnv", () => {
       expect(receiver === undefined || receiver === globalThis).toBe(true);
     }
   });
+
+  it("takes the Google OAuth client from the environment, and always has a Google client", () => {
+    const both = depsFromEnv(
+      { ...env, GOOGLE_CLIENT_ID: "gid", GOOGLE_CLIENT_SECRET: "gsecret" },
+      ctx,
+    );
+    expect(both.googleClientId).toBe("gid");
+    expect(both.googleClientSecret).toBe("gsecret");
+    expect(both.google).toBeDefined();
+    const neither = depsFromEnv(env, ctx);
+    expect(neither.googleClientId).toBeNull();
+    expect(neither.googleClientSecret).toBeNull();
+    expect(neither.google).toBeDefined();
+    const empty = depsFromEnv({ ...env, GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "" }, ctx);
+    expect(empty.googleClientId).toBeNull();
+    expect(empty.googleClientSecret).toBeNull();
+  });
 });

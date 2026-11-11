@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildStatusModal, readStatusSubmission, STATUS_MODAL_CALLBACK } from "./form";
+import {
+  buildStatusModal,
+  MAX_LAST_DAY_AHEAD,
+  readStatusSubmission,
+  STATUS_MODAL_CALLBACK,
+} from "./form";
 
 function values(v: {
   type?: string;
@@ -168,5 +173,19 @@ describe("readStatusSubmission", () => {
       today: "2026-11-12",
     });
     expect(!noType.ok && noType.errors.type).toBe("Pick what's happening");
+  });
+
+  it("accepts a last day exactly 730 days ahead and rejects 731", () => {
+    const plus = (n: number) =>
+      new Date(Date.parse("2026-11-12T00:00:00Z") + n * 86_400_000).toISOString().slice(0, 10);
+    expect(MAX_LAST_DAY_AHEAD).toBe(730);
+    expect(
+      readStatusSubmission(values({ type: "out", from: "2026-11-12", to: plus(730) }), today).ok,
+    ).toBe(true);
+    const r = readStatusSubmission(
+      values({ type: "out", from: "2026-11-12", to: plus(731) }),
+      today,
+    );
+    expect(!r.ok && r.errors.to).toBe("Pick a last day within the next two years.");
   });
 });

@@ -4,6 +4,7 @@ import {
   createTargets,
   type Db,
   executeTargets,
+  getGoogleConnection,
   newId,
   type PersonRow,
   type StatusRow,
@@ -13,7 +14,7 @@ import {
   undoTargets,
 } from "@steward/core";
 import { and, asc, eq } from "drizzle-orm";
-import { planWrites } from "./plan";
+import { GOOGLE_TYPES, planWrites, writesAtSave } from "./plan";
 import { nextDay, zonedTimeToEpochMs } from "./time";
 import type { StatusInput } from "./types";
 
@@ -23,8 +24,17 @@ export const RECOVERY_DELAY_MS = 2 * 60 * 1000;
 export const CANCEL_TOO_LATE =
   "That status has already started — Cancel works only before the first day.";
 
-export type AvailabilityDeps = { db: Db; registry: ConnectorRegistry; now: () => number };
-export type SaveResult = { status: StatusRow; targets: TargetRow[] };
+export const GOOGLE_HINT =
+  "Connect Google and Steward will also set your calendar and Gmail auto-reply — run /ooo google";
+
+export type AvailabilityDeps = {
+  db: Db;
+  registry: ConnectorRegistry;
+  now: () => number;
+  /** Whether to tell a person without Google that they can connect it. Default false. */
+  googleHint?: boolean;
+};
+export type SaveResult = { status: StatusRow; targets: TargetRow[]; notes: string[] };
 
 function ctxFor(person: PersonRow, userToken: string | null): ActorCtx {
   return { workspaceId: person.workspaceId, personId: person.id, userToken };
@@ -78,6 +88,9 @@ export async function saveStatus(
   const startMs = zonedTimeToEpochMs(input.from, "00:00", person.tz);
   const endMs = zonedTimeToEpochMs(nextDay(input.to), "00:00", person.tz);
   const previous = await activeStatusFor(deps.db, person.id);
+  // Read before anything is written, so a failed read cannot leave a status without targets.
+  const wantsGoogle = GOOGLE_TYPES.includes(input.type);
+  const google = wantsGoogle ? await getGoogleConnection(deps.db, person.id) : null;
   const state = startMs <= now ? "active" : "scheduled";
   const status: StatusRow = {
     id: newId(),
@@ -102,22 +115,23 @@ export async function saveStatus(
       .where(eq(schema.statuses.id, previous.id));
   }
   await deps.db.insert(schema.statuses).values(status);
-  let targets = await createTargets(
+  const created = await createTargets(
     deps.db,
     status.id,
-    planWrites(input, { startMs, endMs }),
-    (state === "scheduled" ? startMs : now) + RECOVERY_DELAY_MS,
+    planWrites(input, { startMs, endMs }, { tz: person.tz, google }),
+    (spec) =>
+      // Google accepts future dates, so its writes run now; Slack waits for the start.
+      (writesAtSave(spec.system) || state === "active" ? now : startMs) + RECOVERY_DELAY_MS,
   );
-  if (status.state === "active") {
-    targets = await executeTargets(
-      deps.db,
-      deps.registry,
-      ctxFor(person, userToken),
-      targets,
-      deps.now,
-    );
-  }
-  return { status, targets };
+  const runNow = state === "active" ? created : created.filter((t) => writesAtSave(t.system));
+  const ran =
+    runNow.length === 0
+      ? []
+      : await executeTargets(deps.db, deps.registry, ctxFor(person, userToken), runNow, deps.now);
+  const afterRun = new Map(ran.map((t) => [t.id, t]));
+  const targets = created.map((t) => afterRun.get(t.id) ?? t);
+  const notes = wantsGoogle && !google && deps.googleHint ? [GOOGLE_HINT] : [];
+  return { status, targets, notes };
 }
 
 /** Reverses every write of the person's own status inside the undo window and marks it cancelled. */
@@ -131,7 +145,7 @@ export async function undoStatus(
   if (!status || status.personId !== person.id)
     return { error: "That status isn't yours or no longer exists." };
   if (status.state === "cancelled")
-    return { status, targets: await targetsForStatus(deps.db, status.id) };
+    return { status, targets: await targetsForStatus(deps.db, status.id), notes: [] };
   if (status.undoUntilMs === null || status.undoUntilMs <= deps.now()) {
     // Saved ahead of its first day: what has run out is the time before the start, not five minutes.
     return {
@@ -154,10 +168,14 @@ export async function undoStatus(
     deps.now,
   );
   // A write that stayed `done` was not reversed: keep the status as it is so the card says so and offers Undo again.
-  if (targets.some((t) => t.state === "done")) return { status, targets };
+  if (targets.some((t) => t.state === "done")) return { status, targets, notes: [] };
   await deps.db
     .update(schema.statuses)
     .set({ state: "cancelled", undoUntilMs: null })
     .where(eq(schema.statuses.id, status.id));
-  return { status: { ...status, state: "cancelled", undoUntilMs: null }, targets };
+  return {
+    status: { ...status, state: "cancelled", undoUntilMs: null },
+    targets,
+    notes: [],
+  };
 }

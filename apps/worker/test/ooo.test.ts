@@ -1,5 +1,19 @@
-import { STATUS_MODAL_CALLBACK, UNDO_ACTION, zonedTimeToEpochMs } from "@steward/availability";
-import { type Block, schema } from "@steward/core";
+import {
+  GOOGLE_HINT,
+  STATUS_MODAL_CALLBACK,
+  UNDO_ACTION,
+  zonedTimeToEpochMs,
+} from "@steward/availability";
+import {
+  type Block,
+  deleteGoogleConnection,
+  ensurePerson,
+  schema,
+  seal,
+  setPersonUserToken,
+  upsertWorkspace,
+} from "@steward/core";
+import { seedGoogleConnection } from "@steward/core/testing";
 import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
@@ -417,5 +431,148 @@ describe("/ooo", () => {
       response_action: "errors",
       errors: { to: "The last day has already passed." },
     });
+  });
+});
+
+describe("/ooo with Google", () => {
+  let deps: TestDeps;
+  let app: ReturnType<typeof createApp>;
+
+  const save = async (type: string) => {
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type, from: "2026-11-12", to: "2026-11-17" })),
+    });
+    await flush(deps);
+    return deps.slack.responses.at(-1);
+  };
+  const press = async (statusId: string | undefined) => {
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({
+        type: "block_actions",
+        team: { id: "T1" },
+        user: { id: "U_DANA", username: "dana" },
+        response_url: RESPONSE_URL,
+        actions: [{ action_id: UNDO_ACTION, value: statusId }],
+      }),
+    });
+    await flush(deps);
+  };
+
+  beforeEach(() => {
+    deps = testDeps();
+    app = createApp(deps);
+  });
+
+  it("writes a calendar event and turns the auto-reply on for a connected person, and Undo reverses both", async () => {
+    const person = await seedWorkspace(deps);
+    await seedGoogleConnection(deps.db, deps.tokenKey, {
+      personId: person.id,
+      workspaceId: "T1",
+    });
+    const receipt = await save("out");
+    expect(deps.google.inserts).toHaveLength(1);
+    expect(deps.google.vacation.enableAutoReply).toBe(true);
+    const card = JSON.stringify(receipt?.blocks);
+    expect(card).toContain("Calendar event added");
+    expect(card).toContain("Gmail auto-reply on");
+
+    await press(undoValue(receipt?.blocks ?? []));
+    expect(deps.google.events.size).toBe(0);
+    expect(deps.google.vacation.enableAutoReply).toBe(false);
+  });
+
+  it("Undo still goes through after Google was disconnected, and the card says what was left", async () => {
+    const person = await seedWorkspace(deps);
+    await seedGoogleConnection(deps.db, deps.tokenKey, {
+      personId: person.id,
+      workspaceId: "T1",
+    });
+    const receipt = await save("out");
+    expect(deps.google.inserts).toHaveLength(1);
+    await deleteGoogleConnection(deps.db, person.id);
+
+    await press(undoValue(receipt?.blocks ?? []));
+    expect(deps.slack.statuses.get("xoxp-dana")).toBeNull();
+    const status = (await deps.db.select().from(schema.statuses))[0];
+    expect(status?.state).toBe("cancelled");
+    const card = deps.slack.responses.at(-1);
+    expect(card?.text).toMatch(/^Undone · /);
+    const text = JSON.stringify(card?.blocks);
+    expect(text).toContain("Slack status cleared");
+    expect(text).toContain("Calendar event left in place: Google isn't connected");
+    expect(text).toContain("Gmail auto-reply left in place: Google isn't connected");
+    expect(deps.google.events.size).toBe(1);
+    expect(deps.google.vacation.enableAutoReply).toBe(true);
+  });
+
+  it("cancelling a scheduled status goes through after Google was disconnected", async () => {
+    const person = await seedWorkspace(deps);
+    await seedGoogleConnection(deps.db, deps.tokenKey, {
+      personId: person.id,
+      workspaceId: "T1",
+    });
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify(submission({ type: "out", from: "2026-11-14", to: "2026-11-17" })),
+    });
+    await flush(deps);
+    const receipt = deps.slack.responses.at(-1);
+    expect(receipt?.text).toMatch(/^Scheduled · /);
+    await deleteGoogleConnection(deps.db, person.id);
+
+    await press(undoValue(receipt?.blocks ?? []));
+    const status = (await deps.db.select().from(schema.statuses))[0];
+    expect(status?.state).toBe("cancelled");
+    const card = deps.slack.responses.at(-1);
+    expect(card?.text).toMatch(/^Cancelled · /);
+    const text = JSON.stringify(card?.blocks);
+    expect(text).toContain("Calendar event left in place: Google isn't connected");
+    expect(text).toContain("Gmail auto-reply left in place: Google isn't connected");
+  });
+
+  it("tells a person without Google how to connect it", async () => {
+    await seedWorkspace(deps);
+    const receipt = await save("out");
+    expect(JSON.stringify(receipt?.blocks)).toContain(GOOGLE_HINT);
+    expect(deps.google.inserts).toHaveLength(0);
+  });
+
+  it("does not mention Google while the OAuth client is not set", async () => {
+    deps = testDeps({ googleClientId: null });
+    app = createApp(deps);
+    await seedWorkspace(deps);
+    const receipt = await save("out");
+    expect(JSON.stringify(receipt?.blocks)).not.toContain(GOOGLE_HINT);
+  });
+
+  it("does not hint for a status that has nothing to do with Google", async () => {
+    await seedWorkspace(deps);
+    const receipt = await save("remote");
+    expect(JSON.stringify(receipt?.blocks)).not.toContain(GOOGLE_HINT);
+  });
+
+  it("never tells a demo visitor to connect Google, though Google is configured", async () => {
+    await upsertWorkspace(deps.db, {
+      id: "demo:abc",
+      name: "Demo",
+      botTokenSealed: await seal(deps.tokenKey, "xoxb-bot"),
+      botUserId: "UBOT",
+      installedAt: NOW - 1000,
+    });
+    const person = await ensurePerson(deps.db, "demo:abc", "U_DANA", "dana");
+    await deps.db
+      .update(schema.people)
+      .set({ tz: TZ, profileSyncedAt: NOW })
+      .where(eq(schema.people.id, person.id));
+    await setPersonUserToken(deps.db, person.id, await seal(deps.tokenKey, "xoxp-dana"));
+    await slackPost(app, "/slack/interactions", {
+      payload: JSON.stringify({
+        ...submission({ type: "out", from: "2026-11-12", to: "2026-11-17" }),
+        team: { id: "demo:abc" },
+      }),
+    });
+    await flush(deps);
+    const receipt = deps.slack.responses.at(-1);
+    expect(receipt?.text).toMatch(/^Out of office · /);
+    expect(JSON.stringify(receipt?.blocks)).not.toContain(GOOGLE_HINT);
   });
 });

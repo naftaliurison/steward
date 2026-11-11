@@ -13,7 +13,22 @@ import { STATUS_LABEL, type StatusType } from "./types";
 
 export const UNDO_ACTION = "status_undo";
 
-const SYSTEM_NAME: Record<string, string> = { "slack-status": "Slack status" };
+const SYSTEM_NAME: Record<string, string> = {
+  "slack-status": "Slack status",
+  "google-calendar": "Calendar event",
+  "gmail-responder": "Gmail auto-reply",
+};
+/** The order the lines are shown in, whatever order the targets arrive in; unknown systems come last. */
+const SYSTEM_ORDER = ["slack-status", "google-calendar", "gmail-responder"];
+const systemRank = (system: string): number => {
+  const i = SYSTEM_ORDER.indexOf(system);
+  return i === -1 ? SYSTEM_ORDER.length : i;
+};
+
+const GOOGLE_LINES: Record<string, { done: string; undone: string }> = {
+  "google-calendar": { done: "Calendar event added", undone: "Calendar event removed" },
+  "gmail-responder": { done: "Gmail auto-reply on", undone: "Gmail auto-reply turned off" },
+};
 
 /** True for a status that was saved before its first day. */
 const savedAhead = (status: StatusRow): boolean => status.startMs > status.createdAt;
@@ -27,6 +42,29 @@ function titlePrefix(status: StatusRow): string {
 /** One line per system write, in the words the spec uses: done, didn't go through, skipped, cleared, pending. */
 export function targetLine(target: TargetRow, status: StatusRow, tz: string): string {
   const name = SYSTEM_NAME[target.system] ?? target.system;
+  // An Undo that could not reverse the write, and says why (Google was disconnected).
+  if (target.state === "undone" && target.lastError !== null) {
+    return `↩️ ${name.charAt(0).toUpperCase()}${name.slice(1)} left in place: ${target.lastError}`;
+  }
+  const line = baseLine(target, status, tz, name);
+  // A done target that carries a reason is one whose Undo failed for a passing reason.
+  return target.state === "done" && target.lastError !== null
+    ? `${line} — ${target.lastError}`
+    : line;
+}
+
+function baseLine(target: TargetRow, status: StatusRow, tz: string, name: string): string {
+  const google = GOOGLE_LINES[target.system];
+  if (google) {
+    switch (target.state) {
+      case "done":
+        return `✅ ${google.done} — ${formatRange(status.startMs, status.endMs, tz)}`;
+      case "undone":
+        return `↩️ ${google.undone}`;
+      case "pending":
+        return `⏳ ${name} — Steward is still trying`;
+    }
+  }
   switch (target.state) {
     case "done":
       return `✅ ${name} set — clears ${formatDay(status.endMs - 1, tz)}`;
@@ -46,13 +84,18 @@ export function resultCard(args: {
   targets: TargetRow[];
   tz: string;
   now: number;
+  notes?: string[];
 }): { text: string; blocks: Block[] } {
-  const { status, targets, tz, now } = args;
+  const { status, targets, tz, now, notes = [] } = args;
   const label = STATUS_LABEL[status.type as StatusType] ?? status.type;
   const range = formatRange(status.startMs, status.endMs, tz);
   const title = `${titlePrefix(status)}${label} · ${range}`;
-  const lines = targets.map((t) => targetLine(t, status, tz)).join("\n");
+  const lines = [...targets]
+    .sort((a, b) => systemRank(a.system) - systemRank(b.system))
+    .map((t) => targetLine(t, status, tz))
+    .join("\n");
   const blocks: Block[] = [header(title), section(lines || "Nothing to write for this status.")];
+  for (const note of notes) blocks.push(context(`💡 ${note}`));
   const canUndo =
     status.state !== "cancelled" && status.undoUntilMs !== null && status.undoUntilMs > now;
   if (canUndo && status.undoUntilMs !== null) {

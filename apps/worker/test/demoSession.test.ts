@@ -110,6 +110,17 @@ describe("demo sessions", () => {
     expect(capped?.clockOffsetMs).toBe(DEMO_MAX_ADVANCE_MS);
   });
 
+  it("demo deps carry no Google client id or secret", async () => {
+    const deps = testDeps();
+    expect(deps.googleClientId).not.toBeNull();
+    expect(deps.googleClientSecret).not.toBeNull();
+    const s = await createDemoSession(deps, {});
+    if ("error" in s) throw new Error("unexpected busy");
+    const d = demoDeps(deps, s);
+    expect(d.googleClientId).toBeNull();
+    expect(d.googleClientSecret).toBeNull();
+  });
+
   it("spends one of the day's session slots per create, and refuses when the day's budget is gone", async () => {
     const deps = testDeps();
     const day = new Date(NOW).toISOString().slice(0, 10);

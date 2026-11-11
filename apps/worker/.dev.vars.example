@@ -5,3 +5,6 @@ SLACK_CLIENT_SECRET=from the Slack app's Basic Information page
 TOKEN_KEY=run: node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 APP_URL=http://localhost:8787
 DEMO_ENABLED=1
+# Optional. Without these two, Steward works with Slack only.
+GOOGLE_CLIENT_ID=from the OAuth client in the Google Cloud console
+GOOGLE_CLIENT_SECRET=from the OAuth client in the Google Cloud console

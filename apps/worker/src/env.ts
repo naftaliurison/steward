@@ -10,6 +10,10 @@ export type Env = {
   TOKEN_KEY: string;
   /** Public origin of this Worker, no trailing slash, e.g. https://steward.example.workers.dev */
   APP_URL: string;
+  /** Google OAuth client id; Google stays off until both Google settings are set. */
+  GOOGLE_CLIENT_ID?: string;
+  /** Google OAuth client secret; see GOOGLE_CLIENT_ID. */
+  GOOGLE_CLIENT_SECRET?: string;
   /** "1" turns the public demo (/demo/*) on. Anything else, or unset, leaves it off. */
   DEMO_ENABLED?: string;
   /** Per-visitor rate limit for /demo/* (the `[[ratelimits]]` binding in wrangler.toml). */
