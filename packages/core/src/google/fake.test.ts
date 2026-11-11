@@ -3,7 +3,7 @@ import { GoogleApiError } from "./client";
 import { FakeGoogleClient } from "./fake";
 
 const event = {
-  id: "stwabc",
+  id: "st0abc",
   summary: "Out of office",
   start: { date: "2026-11-12" },
   end: { date: "2026-11-18" },
@@ -14,14 +14,25 @@ describe("FakeGoogleClient", () => {
   it("holds events by calendar and id, and answers 409 for a second insert", async () => {
     const google = new FakeGoogleClient();
     await google.insertEvent({ accessToken: "t", calendarId: "c1", event });
-    expect(google.events.get("c1/stwabc")).toEqual(event);
+    expect(google.events.get("c1/st0abc")).toEqual(event);
     await expect(
       google.insertEvent({ accessToken: "t", calendarId: "c1", event }),
     ).rejects.toMatchObject({ status: 409, code: "duplicate" });
-    await google.deleteEvent({ accessToken: "t", calendarId: "c1", eventId: "stwabc" });
-    await google.deleteEvent({ accessToken: "t", calendarId: "c1", eventId: "stwabc" });
+    await google.deleteEvent({ accessToken: "t", calendarId: "c1", eventId: "st0abc" });
+    await google.deleteEvent({ accessToken: "t", calendarId: "c1", eventId: "st0abc" });
     expect(google.events.size).toBe(0);
     expect(google.inserts).toHaveLength(1);
+  });
+
+  it("refuses an event id Google would refuse: only 0-9 and a-v, five characters or more", async () => {
+    const google = new FakeGoogleClient();
+    for (const id of ["stwabc", "ST0ABC", "st-0abc", "st0a"]) {
+      await expect(
+        google.insertEvent({ accessToken: "t", calendarId: "c1", event: { ...event, id } }),
+      ).rejects.toMatchObject({ status: 400, code: "invalid" });
+    }
+    expect(google.events.size).toBe(0);
+    expect(google.inserts).toHaveLength(0);
   });
 
   it("can refuse out-of-office events the way some accounts do", async () => {

@@ -51,11 +51,15 @@ async function setup(connected = true) {
 }
 
 describe("eventIdFor", () => {
-  it("is stable and shaped stw + 64 hex", async () => {
+  it("is stable and shaped st + 64 hex", async () => {
     const a = await eventIdFor("key-1");
     expect(a).toBe(await eventIdFor("key-1"));
-    expect(a).toMatch(/^stw[0-9a-f]{64}$/);
+    expect(a).toMatch(/^st[0-9a-f]{64}$/);
     expect(a).not.toBe(await eventIdFor("key-2"));
+  });
+
+  it("uses only the characters Google allows in an event id (0-9 and a-v)", async () => {
+    expect(await eventIdFor("key-1")).toMatch(/^[0-9a-v]{5,1024}$/);
   });
 });
 
@@ -152,7 +156,7 @@ describe("GoogleCalendarConnector.undo", () => {
 
   it("skips an undo with a reason when there is no connection", async () => {
     const { connector } = await setup(false);
-    const err = await connector.undo("stwabc", specFor([PRIMARY]), ctx).catch((e) => e);
+    const err = await connector.undo("st0abc", specFor([PRIMARY]), ctx).catch((e) => e);
     expect(err).toBeInstanceOf(SkipWrite);
     expect((err as SkipWrite).reason).toBe("Google isn't connected");
   });

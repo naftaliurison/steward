@@ -81,6 +81,10 @@ export class FakeGoogleClient implements GoogleClient {
     event: GoogleEventInput;
   }): Promise<{ id: string }> {
     this.maybeFail("insertEvent");
+    // Google takes an event id only in base32hex: 0-9 and a-v, five to 1024 characters.
+    if (!/^[0-9a-v]{5,1024}$/.test(args.event.id)) {
+      throw new GoogleApiError("insertEvent", 400, "invalid");
+    }
     if (this.rejectOutOfOffice && args.event.eventType === "outOfOffice") {
       throw new GoogleApiError("insertEvent", 400, "invalid");
     }
